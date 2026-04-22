@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "daffi-terminals"
 description = "Remote terminal control"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = "MIT"
 keywords = [
     "rpc",
@@ -33,7 +33,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Topic :: Internet",
@@ -48,7 +47,7 @@ classifiers = [
 dependencies = [
     "fastapi>=0.95.0",
     "uvicorn[standard]>=0.21.1",
-    "daffi>=2.2.1",
+    "daffi",
 ]
 dynamic = [
     "version",
@@ -86,7 +85,7 @@ all = [
 ]
 
 [[tool.hatch.envs.test.matrix]]
-python = ["38", "39", "310", "311"]
+python = ["39", "310", "311"]
 
 [tool.black]
 line-length = 120

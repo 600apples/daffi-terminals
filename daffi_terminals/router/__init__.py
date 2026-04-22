@@ -1,11 +1,73 @@
 from argparse import Namespace
-from daffi_terminals.router.router import Router, WebHandler
+
+from daffi.utils.logger import get_daffi_logger
+from daffi.utils import colors
+
+logger = get_daffi_logger("router", colors.green)
 
 
-def start_router(args: Namespace):
-    web_handler = WebHandler(web_host=args.web_host, web_port=args.web_port)
-    router = Router(
-        rpc_host=args.rpc_host, rpc_port=args.rpc_port,
-        ssl_cert=args.ssl_cert, ssl_key=args.ssl_key, web_handler=web_handler
+def start_router(args: Namespace) -> None:
+    """
+    Start the TermRouter process:
+      1. Import router.py — this registers the TermRouter @callback functions.
+      2. Start the daffi Router (native message-routing server).
+      3. Register the event handler, then connect the TermRouter daffi Client.
+      4. Start the FastAPI web server (blocks until the process exits).
+    """
+    # Importing router.py triggers @callback registration for send_terminal_output
+    # and terminal_closed.  This MUST happen before Client.connect().
+    import daffi_terminals.router.router as _router_module
+
+    from daffi import Router, Client
+
+    rpc_host = args.rpc_host
+    rpc_port = int(args.rpc_port)
+    ssl_cert = getattr(args, "ssl_cert", None) or ""
+    ssl_key = getattr(args, "ssl_key", None) or ""
+    use_tls = bool(ssl_cert and ssl_key)
+
+    # ── 1. daffi Router ──────────────────────────────────────────────────────
+    daffi_router = Router(
+        host=rpc_host,
+        port=rpc_port,
+        tls=use_tls,
+        cert_file=ssl_cert,
+        key_file=ssl_key,
     )
-    router.run()
+    daffi_router.start()
+    logger.info("daffi Router listening on %s:%s", rpc_host, rpc_port)
+
+    # ── 2. TermRouter Client ─────────────────────────────────────────────────
+    client = Client(
+        app_name="TermRouter",
+        host=rpc_host,
+        port=rpc_port,
+        tls=use_tls,
+        cert_file=ssl_cert,
+        key_file=ssl_key,
+    )
+
+    # Event handler MUST be registered before connect().
+    client.add_event_handler(_router_module._daffi_event_handler)
+
+    conn = client.connect()
+
+    # Make the connection available to router.py's callbacks and WebHandler.
+    _router_module._conn = conn
+
+    logger.info("TermRouter connected on %s:%s", rpc_host, rpc_port)
+
+    # ── 3. FastAPI web server ─────────────────────────────────────────────────
+    web_ssl_cert = getattr(args, "web_ssl_cert", None) or ""
+    web_ssl_key  = getattr(args, "web_ssl_key",  None) or ""
+    use_web_tls  = bool(web_ssl_cert and web_ssl_key)
+
+    web_handler = _router_module.WebHandler(
+        web_host=args.web_host,
+        web_port=int(args.web_port),
+        ssl_cert=web_ssl_cert or None,
+        ssl_key=web_ssl_key or None,
+    )
+    scheme = "https" if use_web_tls else "http"
+    logger.info("Web UI available at %s://%s:%s", scheme, args.web_host, args.web_port)
+    web_handler.run()  # blocks until the process is killed
