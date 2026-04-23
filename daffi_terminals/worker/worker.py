@@ -14,6 +14,7 @@ import ctypes
 import ctypes.util
 import fcntl
 import json
+import multiprocessing
 import os
 import platform
 import re
@@ -34,20 +35,47 @@ logger = get_daffi_logger("worker", colors.cyan)
 
 BYTES_CHUNK = 64 * 1024  # max bytes per PTY read
 
-# True on macOS — where ``os.forkpty()`` / ``subprocess`` called from a daffi
-# callback thread can close the parent's RPC socket fd as a side effect.  On
-# macOS we route PTY spawning through a dedicated helper subprocess that was
-# forked while the worker was still single-threaded (see pty_helper.py).
-# On Linux, forking from a daffi callback thread is safe, so we take the
-# simpler path: call ``os.forkpty()`` directly.
-_USE_PTY_HELPER = sys.platform == "darwin"
+
+def _detect_pty_helper_needed() -> bool:
+    """
+    Return True if PTY spawning must be routed through the helper subprocess.
+
+    The helper is needed when ``fork()`` from a non-main thread is unsafe —
+    i.e. when Python's default multiprocessing start method is ``"spawn"``.
+    Python set that default on macOS (3.8+) for exactly this reason.
+    ``"forkserver"`` is excluded: it is a user/library choice that says nothing
+    about raw ``os.forkpty()`` safety.
+
+    ``DAFFI_USE_PTY_HELPER=1/0`` overrides the detection for edge cases.
+    """
+    env = os.environ.get("DAFFI_USE_PTY_HELPER", "").lower()
+    if env in ("1", "true", "yes"):
+        return True
+    if env in ("0", "false", "no"):
+        return False
+
+    try:
+        return multiprocessing.get_start_method() == "spawn"
+    except Exception:
+        return sys.platform == "darwin"
+
+
+_USE_PTY_HELPER = _detect_pty_helper_needed()
+logger.info(
+    "PTY helper: %s (platform=%s fork_method=%s)",
+    "enabled" if _USE_PTY_HELPER else "disabled",
+    sys.platform,
+    multiprocessing.get_start_method(),
+)
 
 # Set by start_worker() immediately after client.connect().
 # All callbacks below reference this at call time, not at decoration time.
 _conn  = None
 _GROUP = ""   # optional group label, set from --group CLI arg
 
-# Set by start_worker() on macOS *before* daffi is connected.  Unused on Linux.
+# Set by start_worker() before daffi is connected when _USE_PTY_HELPER is True.
+# The helper must be forked while the process is still single-threaded so that
+# it never inherits live RPC sockets.
 _helper_sock: "socket.socket | None" = None
 _helper_proc = None
 _helper_lock = Lock()
@@ -74,7 +102,7 @@ def _helper_request(req: dict, expect_fd: bool = False) -> tuple[dict, list[int]
 
     # Strip env from the debug log so we don't dump the whole environment.
     log_req = {k: v for k, v in req.items() if k != "env"}
-    logger.debug("helper → %s", log_req)
+    logger.debug("helper -> %s", log_req)
 
     payload = (json.dumps(req) + "\n").encode()
     with _helper_lock:
@@ -101,7 +129,7 @@ def _helper_request(req: dict, expect_fd: bool = False) -> tuple[dict, list[int]
 
         line, _nl, _rest = bytes(buf).partition(b"\n")
         resp = json.loads(line.decode())
-        logger.debug("helper ← %s  fds=%s", resp, received_fds)
+        logger.debug("helper <- %s  fds=%s", resp, received_fds)
         return resp, received_fds
 
 
@@ -110,8 +138,9 @@ def _spawn_pty(shell: str, env: dict) -> tuple[int, int] | None:
     """
     Spawn a PTY shell and return ``(pid, master_fd)``.
 
-    On macOS the call is delegated to the helper subprocess; on every other
-    platform we ``os.forkpty()`` directly.  Returns None on failure.
+    When ``_USE_PTY_HELPER`` is True the call is delegated to the helper
+    subprocess; otherwise we call ``os.forkpty()`` directly.  Returns None on
+    failure.
     """
     if _USE_PTY_HELPER:
         try:
@@ -161,8 +190,7 @@ def _run_terminal(term_id: str, ready: Event) -> None:
     pid, fdm = spawned
 
     _terminals[term_id] = fdm
-    if _USE_PTY_HELPER:
-        _terminal_pids[term_id] = pid
+    _terminal_pids[term_id] = pid
     logger.debug("_run_terminal: term_id=%s pid=%d fd=%d", term_id, pid, fdm)
     ready.set()
     try:
@@ -189,13 +217,7 @@ def _run_terminal(term_id: str, ready: Event) -> None:
             os.close(fdm)
         except OSError:
             pass
-        # On macOS the shell lives in the helper's process group, so closing
-        # the master fd alone doesn't deliver SIGHUP — ask the helper to do it.
-        if _USE_PTY_HELPER:
-            try:
-                _helper_request({"action": "kill", "pid": pid, "sig": 1})  # SIGHUP
-            except Exception as exc:
-                logger.debug("kill request to helper failed: %s", exc)
+        _kill_shell(pid)
         try:
             _conn.rpc_nowait(receiver="TermRouter").terminal_closed(term_id)
         except Exception as exc:
@@ -503,21 +525,37 @@ def start_terminal(term_id: str) -> bool:
     ready = Event()
     Thread(target=_run_terminal, args=(term_id, ready), daemon=True).start()
     got_ready = ready.wait(timeout=5)
+    ok = got_ready and term_id in _terminals
     logger.debug("start_terminal: term_id=%s ready=%s in _terminals=%s",
                  term_id, got_ready, term_id in _terminals)
-    return True
+    return ok
+
+
+def _kill_shell(pid: int) -> None:
+    """Send SIGHUP to the shell process owning this PTY."""
+    if _USE_PTY_HELPER:
+        try:
+            _helper_request({"action": "kill", "pid": pid, "sig": 1})  # SIGHUP
+        except Exception as exc:
+            logger.debug("_kill_shell helper kill failed: %s", exc)
+        return
+    try:
+        os.kill(pid, 1)  # SIGHUP
+    except ProcessLookupError:
+        pass
+    except OSError as exc:
+        logger.debug("_kill_shell os.kill failed: %s", exc)
 
 
 @callback
 def stop_terminal(term_id: str):
-    """Send Ctrl-D to the shell to close the session gracefully."""
+    """Force the shell to exit so _run_terminal can tear the session down."""
     logger.debug("stop_terminal: term_id=%s", term_id)
-    fdm = _terminals.get(term_id)
-    if fdm is not None:
-        try:
-            os.write(fdm, b"\x04")  # Ctrl-D → EOF
-        except OSError as exc:
-            logger.debug("stop_terminal write failed: %s", exc)
+    pid = _terminal_pids.get(term_id)
+    if pid is None:
+        logger.debug("stop_terminal: unknown term_id=%s", term_id)
+        return
+    _kill_shell(pid)
 
 
 @callback

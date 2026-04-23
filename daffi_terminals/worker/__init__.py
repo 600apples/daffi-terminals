@@ -10,6 +10,8 @@ from argparse import Namespace
 from daffi.utils.logger import get_daffi_logger
 from daffi.utils import colors
 
+from daffi_terminals._utils import silence_native_stdio
+
 logger = get_daffi_logger("worker", colors.cyan)
 
 
@@ -94,7 +96,6 @@ def start_worker(args: Namespace) -> None:
         _worker_module._helper_sock = helper_sock
         _worker_module._helper_proc = helper_proc
 
-    logger.debug("importing daffi.Client …")
     from daffi import Client
 
     worker_name = args.name or f"{socket.gethostname()}-0x{uuid.uuid4().hex[:8]}"
@@ -130,6 +131,25 @@ def start_worker(args: Namespace) -> None:
         "%r connected to router at %s:%s", worker_name, args.rpc_host, args.rpc_port
     )
 
-    # Block indefinitely — daffi handles reconnects transparently.
+    # Block until Ctrl-C / SIGTERM, then tear daffi down cleanly so the
+    # router doesn't see a "error.ReadError" for a dead socket on our way
+    # out.  signal.pause() returns on any delivered signal; we install a
+    # no-op handler for SIGINT/SIGTERM so they interrupt pause() instead
+    # of tripping the default handler (which is what was aborting us
+    # abruptly).
     logger.debug("entering signal.pause() (pid=%d)", os.getpid())
-    signal.pause()
+
+    def _graceful_exit(signum, _frame):
+        logger.debug("signal %d received; stopping daffi client", signum)
+
+    signal.signal(signal.SIGINT,  _graceful_exit)
+    signal.signal(signal.SIGTERM, _graceful_exit)
+
+    try:
+        signal.pause()
+    finally:
+        silence_native_stdio()
+        try:
+            client.stop()
+        except Exception:
+            logger.debug("daffi Client.stop() raised", exc_info=True)

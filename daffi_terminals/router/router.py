@@ -11,6 +11,7 @@ When a worker connects, the event handler fetches its metadata by calling
 get_worker_info() on it.
 """
 
+import time
 import uuid
 import asyncio
 import logging
@@ -18,16 +19,15 @@ from pathlib import Path
 from threading import Event
 from dataclasses import dataclass, asdict, field
 from contextlib import asynccontextmanager
-from queue import Queue, Empty
+from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
 from typing import Dict
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, APIRouter
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.websockets import WebSocketDisconnect
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
 
 from daffi import callback
 from daffi.utils.logger import get_daffi_logger
@@ -46,6 +46,15 @@ _workers: Dict[str, "Worker"] = {}       # process_name → Worker
 _worker_terminals: Dict[str, set] = {}   # process_name → set of active term_ids
 _worker_update_event = Event()            # set by event/callback threads, waited by async observer
 _shutdown = Event()                       # set during lifespan shutdown to unblock executor threads
+
+# Dedicated executor for every blocking call the router dispatches via
+# run_in_executor().  We *must not* share asyncio's default executor here:
+# open terminals each keep a thread permanently parked in queue.get(), and
+# with the default pool size (min(32, cpu+4) = 12 on an 8-core laptop) that
+# quickly starves unrelated coroutines — facts requests and tab spawns would
+# stop working the moment the 13th tab opens.  64 threads is plenty of
+# headroom for hundreds of simultaneous PTY sessions.
+_router_pool = ThreadPoolExecutor(max_workers=64, thread_name_prefix="router-io")
 
 
 # ─── @callback functions exposed to worker nodes ──────────────────────────────
@@ -83,11 +92,59 @@ class Worker:
 
 # ─── daffi event handler (called from daffi's executor thread) ────────────────
 
+def _fetch_worker_info(member: str) -> None:
+    """Background-thread job: fetch metadata for a freshly-connected worker.
+
+    Runs on the router's own thread pool — *never* on daffi's event-dispatch
+    thread.  Performing RPCs on the event thread can soft-deadlock a
+    reconnecting worker because the same thread must also deliver the
+    worker's callback-registration frames before the RPC can be satisfied.
+    A short retry loop absorbs the small window between `connected` firing
+    and the registrations becoming visible.
+    """
+    attempts = 3
+    delay = 0.5
+    for attempt in range(1, attempts + 1):
+        try:
+            logger.debug("get_worker_info(%r) attempt %d …", member, attempt)
+            info = _conn.rpc(timeout=5, receiver=member).get_worker_info()
+            break
+        except Exception as exc:
+            if attempt == attempts:
+                logger.error("Failed to fetch info from %r: %s", member, exc)
+                return
+            logger.debug(
+                "get_worker_info(%r) failed (%s); retry %d/%d in %.1fs",
+                member, exc, attempt, attempts, delay,
+            )
+            time.sleep(delay)
+            delay *= 2
+
+    worker = Worker(
+        host=info["host"],
+        mac=info["mac"],
+        process_name=member,
+        id=info["id"],
+        group=info.get("group") or "",
+        active=True,
+    )
+    existing = _workers.get(member)
+    if existing and existing.id != worker.id and existing.active:
+        logger.warning(
+            "Duplicate worker name %r detected — previous session deactivated.", member
+        )
+        existing.active = False
+    _workers[member] = worker
+    logger.info("Worker connected: %s", worker)
+    _worker_update_event.set()
+
+
 def _daffi_event_handler(event: dict) -> None:
     """
     Handle member connected / disconnected events.
 
-    Connected  → fetch worker metadata and register in _workers.
+    Connected  → schedule metadata fetch on router pool (never block the
+                 event-dispatch thread on an RPC).
     Disconnected → mark the worker as inactive and signal the async observer.
     """
     event_type = event.get("type")
@@ -99,28 +156,7 @@ def _daffi_event_handler(event: dict) -> None:
         return
 
     if event_type == "connected":
-        try:
-            logger.debug("calling get_worker_info() on %r …", member)
-            info = _conn.rpc(timeout=5, receiver=member).get_worker_info()
-            worker = Worker(
-                host=info["host"],
-                mac=info["mac"],
-                process_name=member,
-                id=info["id"],
-                group=info.get("group") or "",
-                active=True,
-            )
-            # Detect duplicate name: same process_name, different UUID, still active.
-            existing = _workers.get(member)
-            if existing and existing.id != worker.id and existing.active:
-                logger.warning(
-                    "Duplicate worker name %r detected — previous session deactivated.", member
-                )
-                existing.active = False
-            _workers[member] = worker
-            logger.info("Worker connected: %s", worker)
-        except Exception as exc:
-            logger.error("Failed to fetch info from %r: %s", member, exc)
+        _router_pool.submit(_fetch_worker_info, member)
 
     elif event_type == "disconnected":
         worker = _workers.get(member)
@@ -140,6 +176,43 @@ def _daffi_event_handler(event: dict) -> None:
     _worker_update_event.set()
 
 
+# ─── Pure-ASGI wrapper ────────────────────────────────────────────────────────
+#
+# Starlette's BaseHTTPMiddleware has a long-standing quirk
+# (https://github.com/encode/starlette/issues/1438) that turns a client-side
+# disconnection mid-request into an `asyncio.CancelledError` surfacing as a 500
+# with a noisy traceback.  We don't use BaseHTTPMiddleware any more, but we
+# still want to guard against the same pattern at the edge: if the browser
+# closes a tab while /api/workers/.../facts is blocked in a slow RPC, the
+# inner task gets cancelled and the error would otherwise be logged by
+# uvicorn.  Swallowing `CancelledError` here keeps the router silent and
+# stable when clients come and go.
+
+class _CancelSafeASGI:
+    """Wraps an ASGI app, dropping CancelledError from disconnected clients."""
+
+    def __init__(self, app):
+        self._app = app
+
+    async def __call__(self, scope, receive, send):
+        # DevTools source-map probes produce harmless 404 noise.  Answer them
+        # with a cheap 204 before they reach the router.
+        if scope["type"] == "http" and scope.get("path", "").endswith(".map"):
+            await send({"type": "http.response.start", "status": 204, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+            return
+        try:
+            await self._app(scope, receive, send)
+        except asyncio.CancelledError:
+            # Client went away mid-request; uvicorn's request task will be
+            # torn down cleanly.  Swallowing here prevents a spurious
+            # "Exception in ASGI application" log entry.
+            return
+        except Exception:
+            logger.exception("unhandled error in ASGI app")
+            raise
+
+
 # ─── FastAPI web handler ───────────────────────────────────────────────────────
 
 class WebHandler:
@@ -157,22 +230,13 @@ class WebHandler:
         self.ssl_cert = ssl_cert
         self.ssl_key  = ssl_key
         self._director_sockets: Dict[int, WebSocket] = {}
-        self.app = self._build_app()
+        self._terminal_sockets: Dict[int, WebSocket] = {}
+        self.app = _CancelSafeASGI(self._build_app())
 
     # ── app construction ──────────────────────────────────────────────────────
 
     def _build_app(self) -> FastAPI:
         app = FastAPI(lifespan=self._lifespan)
-
-        # Silently return 204 for browser DevTools source-map requests (.map files).
-        # Without this they generate harmless but noisy 404 log entries.
-        class _SuppressMapRequests(BaseHTTPMiddleware):
-            async def dispatch(self, request: Request, call_next):
-                if request.url.path.endswith('.map'):
-                    return Response(status_code=204)
-                return await call_next(request)
-
-        app.add_middleware(_SuppressMapRequests)
 
         static = StaticFiles(directory=ROUTER_ROOT / "static")
         app.mount("/static", static, name="static")
@@ -190,14 +254,45 @@ class WebHandler:
     async def _lifespan(self, *_):
         observer = asyncio.create_task(self._worker_update_observer())
         yield
-        # Signal all blocked executor threads to exit, then wait briefly for them.
+
+        # ── Shutdown sequence ────────────────────────────────────────────────
+        # uvicorn will not force-close open WebSocket connections on shutdown;
+        # it just waits for their ASGI handlers to return (that's the
+        # "Waiting for background tasks to complete" spinner).  We must
+        # therefore proactively close every open WebSocket *and* unblock every
+        # background thread before returning from the lifespan.
+
         _shutdown.set()
         _worker_update_event.set()   # unblock the observer's wait() call
+
+        # Wake every output-pump thread parked in queue.get() so their
+        # _terminal handlers proceed into their finally-block and exit.
+        for q in list(_ws_queues.values()):
+            try:
+                q.put_nowait(STOP_MARKER)
+            except Exception:
+                pass
+
+        # Force-close every open director/terminal WebSocket.  Both handlers
+        # are idle in iter_json()/iter_bytes() and will only return once the
+        # socket is closed.
+        for sock in list(self._director_sockets.values()):
+            try:
+                await sock.close(code=1001)
+            except Exception:
+                pass
+        for sock in list(self._terminal_sockets.values()):
+            try:
+                await sock.close(code=1001)
+            except Exception:
+                pass
+
         observer.cancel()
         try:
             await asyncio.wait_for(asyncio.shield(observer), timeout=2.0)
         except (asyncio.CancelledError, asyncio.TimeoutError):
             pass
+        _router_pool.shutdown(wait=False, cancel_futures=True)
 
     # ── HTTP ──────────────────────────────────────────────────────────────────
 
@@ -213,17 +308,34 @@ class WebHandler:
         return {"version": version}
 
     async def _worker_facts(self, worker_id: str):
-        """Fetch host facts live from the worker on demand (never cached)."""
+        """Fetch host facts live from the worker on demand (never cached).
+
+        Uses a short RPC timeout and wraps the blocking call in
+        ``asyncio.wait_for`` so that a slow/unresponsive worker can never
+        pin an executor thread past the point at which the client has
+        moved on.  Without this guard, rapid tab-switching against a
+        stalled worker quickly saturates the default threadpool and the
+        whole router becomes unresponsive.
+        """
         worker = _workers.get(worker_id)
         if not worker or not worker.active:
             return {}
         loop = asyncio.get_event_loop()
+        rpc_timeout = 3
         try:
-            facts = await loop.run_in_executor(
-                None,
-                lambda: _conn.rpc(timeout=10, receiver=worker_id).get_host_facts(),
+            facts = await asyncio.wait_for(
+                loop.run_in_executor(
+                    _router_pool,
+                    lambda: _conn.rpc(timeout=rpc_timeout, receiver=worker_id).get_host_facts(),
+                ),
+                timeout=rpc_timeout + 1,
             )
             return facts or {}
+        except asyncio.TimeoutError:
+            logger.debug("get_host_facts from %r timed out", worker_id)
+            return {}
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.debug("get_host_facts from %r: %s", worker_id, exc)
             return {}
@@ -274,12 +386,14 @@ class WebHandler:
         queue: Queue = Queue()
         _ws_queues[term_id] = queue
         _worker_terminals.setdefault(worker_id, set()).add(term_id)
+        tid = id(websocket)
+        self._terminal_sockets[tid] = websocket
         loop = asyncio.get_event_loop()
 
         # Tell the worker to start a PTY for this session.
         try:
             await loop.run_in_executor(
-                None,
+                _router_pool,
                 lambda: _conn.rpc(timeout=10, receiver=worker_id).start_terminal(term_id),
             )
         except Exception as exc:
@@ -292,16 +406,18 @@ class WebHandler:
         # Pump PTY output (queued by send_terminal_output callback) → browser.
         async def _pump_output():
             def _get():
-                """Blocking get with a short timeout so the thread can exit on shutdown."""
-                while not _shutdown.is_set():
-                    try:
-                        return queue.get(timeout=0.5)
-                    except Empty:
-                        pass
-                return STOP_MARKER
+                """Blocking get that unblocks either on data or on STOP_MARKER.
+
+                Using a single blocking get (no 0.5 s poll) keeps the thread
+                idle when nothing is happening, and the finally block below
+                guarantees a STOP_MARKER is enqueued on every session exit —
+                so the thread always returns promptly instead of leaking
+                for the lifetime of the router process.
+                """
+                return queue.get()
 
             while True:
-                data = await loop.run_in_executor(None, _get)
+                data = await loop.run_in_executor(_router_pool, _get)
                 if data is STOP_MARKER:
                     break
                 try:
@@ -323,7 +439,7 @@ class WebHandler:
                 cmd, body = payload[0], payload[1:]
                 if cmd == 0x01:  # DATA
                     await loop.run_in_executor(
-                        None,
+                        _router_pool,
                         lambda b=body: _conn.rpc_nowait(receiver=worker_id)
                         .receive_terminal_input(term_id, b),
                     )
@@ -331,7 +447,7 @@ class WebHandler:
                     try:
                         rows, cols = map(int, body.decode().split(","))
                         await loop.run_in_executor(
-                            None,
+                            _router_pool,
                             lambda r=rows, c=cols: _conn.rpc_nowait(receiver=worker_id)
                             .resize_terminal(term_id, r, c),
                         )
@@ -340,12 +456,19 @@ class WebHandler:
         except (WebSocketDisconnect, RuntimeError, asyncio.CancelledError):
             pass
         finally:
+            # Wake the output pump immediately so its executor thread exits
+            # instead of leaking until the next terminal_closed callback.
+            try:
+                queue.put_nowait(STOP_MARKER)
+            except Exception:
+                pass
             output_task.cancel()
             _ws_queues.pop(term_id, None)
             _worker_terminals.get(worker_id, set()).discard(term_id)
+            self._terminal_sockets.pop(tid, None)
             try:
                 await loop.run_in_executor(
-                    None,
+                    _router_pool,
                     lambda: _conn.rpc_nowait(receiver=worker_id).stop_terminal(term_id),
                 )
             except Exception:
@@ -378,7 +501,7 @@ class WebHandler:
             return False
 
         while True:
-            triggered = await loop.run_in_executor(None, _wait)
+            triggered = await loop.run_in_executor(_router_pool, _wait)
             if not triggered:
                 break
             _worker_update_event.clear()

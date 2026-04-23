@@ -3,6 +3,8 @@ from argparse import Namespace
 from daffi.utils.logger import get_daffi_logger
 from daffi.utils import colors
 
+from daffi_terminals._utils import silence_native_stdio
+
 logger = get_daffi_logger("router", colors.green)
 
 
@@ -70,4 +72,19 @@ def start_router(args: Namespace) -> None:
     )
     scheme = "https" if use_web_tls else "http"
     logger.info("Web UI available at %s://%s:%s", scheme, args.web_host, args.web_port)
-    web_handler.run()  # blocks until the process is killed
+    try:
+        web_handler.run()  # blocks until the process is killed
+    finally:
+        # Silence native stdout/stderr for the rest of the process.  daffi's
+        # Zig transport logs "error.ReadError" from a background thread that
+        # only wakes up *after* client.stop()/daffi_router.stop() have
+        # returned — any restore-on-exit wrapper would race against that.
+        silence_native_stdio()
+        try:
+            client.stop()
+        except Exception:
+            logger.debug("daffi Client.stop() raised", exc_info=True)
+        try:
+            daffi_router.stop()
+        except Exception:
+            logger.debug("daffi Router.stop() raised", exc_info=True)
