@@ -29,8 +29,14 @@ def main():
     worker_parser.add_argument("--rpc-port", help="Router port to connect", type=int, required=True)
     worker_parser.add_argument("--ssl-cert", default=None, help="Path to ssl certificate")
     worker_parser.add_argument("--ssl-key", default=None, help="Path to ssl private key")
+    worker_parser.add_argument("--debug", action="store_true",
+                               help="Enable verbose debug logging for the worker")
+    router_parser.add_argument("--debug", action="store_true",
+                               help="Enable verbose debug logging for the router")
 
     args = parser.parse_args()
+    if getattr(args, "debug", False):
+        logging.getLogger().setLevel(logging.DEBUG)
     if parser.parse_args().command == "start-router":
         from daffi_terminals.router import start_router
         start_router(args)

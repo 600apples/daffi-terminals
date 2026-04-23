@@ -92,6 +92,7 @@ def _daffi_event_handler(event: dict) -> None:
     """
     event_type = event.get("type")
     member = event.get("member", "")
+    logger.debug("daffi event: type=%s member=%s raw=%s", event_type, member, event)
 
     # Ignore events for ourselves.
     if member == "TermRouter":
@@ -99,6 +100,7 @@ def _daffi_event_handler(event: dict) -> None:
 
     if event_type == "connected":
         try:
+            logger.debug("calling get_worker_info() on %r …", member)
             info = _conn.rpc(timeout=5, receiver=member).get_worker_info()
             worker = Worker(
                 host=info["host"],
