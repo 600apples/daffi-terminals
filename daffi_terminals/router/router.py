@@ -20,7 +20,6 @@ from threading import Event
 from dataclasses import dataclass, asdict, field
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
-from queue import Queue
 from typing import Dict
 
 import uvicorn
@@ -41,7 +40,8 @@ STOP_MARKER = None  # sentinel: put in queue to signal terminal session ended
 # ─── Shared state (set by start_router before the web server starts) ──────────
 
 _conn = None                              # daffi ClientConnection for TermRouter
-_ws_queues: Dict[str, Queue] = {}        # term_id → Queue[bytes | None]
+_event_loop: asyncio.AbstractEventLoop = None  # set in lifespan; used by sync callbacks
+_ws_queues: Dict[str, asyncio.Queue] = {}      # term_id → asyncio.Queue[bytes | None]
 _workers: Dict[str, "Worker"] = {}       # process_name → Worker
 _worker_terminals: Dict[str, set] = {}   # process_name → set of active term_ids
 _worker_update_event = Event()            # set by event/callback threads, waited by async observer
@@ -61,10 +61,14 @@ _router_pool = ThreadPoolExecutor(max_workers=64, thread_name_prefix="router-io"
 
 @callback
 def send_terminal_output(term_id: str, data: bytes):
-    """Receive a PTY output chunk from a worker and queue it for the browser."""
+    """Receive a PTY output chunk from a worker and queue it for the browser.
+
+    Called on daffi's poller thread (not the event loop thread), so we must
+    use call_soon_threadsafe to safely hand the item to the asyncio.Queue.
+    """
     q = _ws_queues.get(term_id)
     if q is not None:
-        q.put_nowait(data)
+        _event_loop.call_soon_threadsafe(q.put_nowait, data)
 
 
 @callback
@@ -72,7 +76,7 @@ def terminal_closed(term_id: str):
     """Worker signals that the PTY session has ended — unblock the WebSocket reader."""
     q = _ws_queues.get(term_id)
     if q is not None:
-        q.put_nowait(STOP_MARKER)
+        _event_loop.call_soon_threadsafe(q.put_nowait, STOP_MARKER)
 
 
 # ─── Worker metadata ──────────────────────────────────────────────────────────
@@ -255,6 +259,10 @@ class WebHandler:
 
     @asynccontextmanager
     async def _lifespan(self, *_):
+        global _event_loop
+        # Capture the running event loop so synchronous daffi callbacks can
+        # safely hand items to asyncio.Queue via call_soon_threadsafe.
+        _event_loop = asyncio.get_running_loop()
         observer = asyncio.create_task(self._worker_update_observer())
         yield
 
@@ -263,13 +271,14 @@ class WebHandler:
         # it just waits for their ASGI handlers to return (that's the
         # "Waiting for background tasks to complete" spinner).  We must
         # therefore proactively close every open WebSocket *and* unblock every
-        # background thread before returning from the lifespan.
+        # pending coroutine before returning from the lifespan.
 
         _shutdown.set()
         _worker_update_event.set()   # unblock the observer's wait() call
 
-        # Wake every output-pump thread parked in queue.get() so their
+        # Wake every _pump_output coroutine blocked on queue.get() so their
         # _terminal handlers proceed into their finally-block and exit.
+        # We're on the event loop here, so put_nowait is safe to call directly.
         for q in list(_ws_queues.values()):
             try:
                 q.put_nowait(STOP_MARKER)
@@ -386,7 +395,7 @@ class WebHandler:
             return
 
         term_id = str(uuid.uuid4())
-        queue: Queue = Queue()
+        queue: asyncio.Queue = asyncio.Queue()
         _ws_queues[term_id] = queue
         _worker_terminals.setdefault(worker_id, set()).add(term_id)
         tid = id(websocket)
@@ -406,21 +415,14 @@ class WebHandler:
             await websocket.close()
             return
 
-        # Pump PTY output (queued by send_terminal_output callback) → browser.
+        # Pump PTY output (enqueued by send_terminal_output callback) → browser.
+        #
+        # Using asyncio.Queue + await queue.get() means this coroutine
+        # suspends (not a thread) while waiting for data — zero thread-pool
+        # slots consumed per idle terminal.
         async def _pump_output():
-            def _get():
-                """Blocking get that unblocks either on data or on STOP_MARKER.
-
-                Using a single blocking get (no 0.5 s poll) keeps the thread
-                idle when nothing is happening, and the finally block below
-                guarantees a STOP_MARKER is enqueued on every session exit —
-                so the thread always returns promptly instead of leaking
-                for the lifetime of the router process.
-                """
-                return queue.get()
-
             while True:
-                data = await loop.run_in_executor(_router_pool, _get)
+                data = await queue.get()
                 if data is STOP_MARKER:
                     break
                 try:
@@ -459,8 +461,8 @@ class WebHandler:
         except (WebSocketDisconnect, RuntimeError, asyncio.CancelledError):
             pass
         finally:
-            # Wake the output pump immediately so its executor thread exits
-            # instead of leaking until the next terminal_closed callback.
+            # Signal _pump_output to exit. We're on the event loop so
+            # put_nowait is safe to call directly (no call_soon_threadsafe needed).
             try:
                 queue.put_nowait(STOP_MARKER)
             except Exception:

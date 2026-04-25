@@ -18,13 +18,21 @@
     <div class="dt-host-facts" id="host-facts"></div>
 
     <div class="dt-navbar-right">
-    <!-- Theme toggle (moon = currently dark, click for light; sun = currently light, click for dark) -->
-    <button class="dt-theme-toggle" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+    <!-- Theme toggle — cycles dark → medium → light → dark -->
+    <button class="dt-theme-toggle" id="theme-toggle" title="Switch theme" aria-label="Switch theme">
       <!-- Moon — shown in dark mode -->
       <svg class="icon-moon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-        <path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/>
+        <path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"
+              style="stroke:currentColor;stroke-width:2;stroke-linecap:round;fill:currentColor"/>
       </svg>
-      <!-- Sun — shown in light mode -->
+      <!-- Half-sun (sunrise) — shown in medium mode -->
+      <svg class="icon-half-sun" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 3v2M5.22 5.22l1.42 1.42M2.5 12.5h2M19.5 12.5h2M17.36 6.64l1.42-1.42"/>
+        <path d="M5 17.5A7 7 0 0 1 19 17.5"/>
+        <line x1="2" y1="17.5" x2="22" y2="17.5"/>
+        <style>path,line{stroke:currentColor;stroke-width:2;stroke-linecap:round;fill:none}</style>
+      </svg>
+      <!-- Full sun — shown in light mode -->
       <svg class="icon-sun" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
         <circle cx="12" cy="12" r="4"/>
         <path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42

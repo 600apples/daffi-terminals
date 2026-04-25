@@ -3,8 +3,9 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Theme tokens
    ─────────────────────────────────────────────────────────────────────────
-   Dark (default) — navy/charcoal + SVG gradient header
-   Light          — Solarized Light warm-pastel palette
+   Dark   (default) — navy/charcoal + SVG gradient header
+   Medium           — lavender-gray palette (mkdocs daffi light scheme)
+   Light            — Solarized Light warm-pastel palette
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
@@ -79,6 +80,80 @@
     --group-header-bg:   rgba(255,255,255,.04);
     --group-header-text: #9090aa;
     --group-header-hover:#b0b0cc;
+}
+
+[data-theme="medium"] {
+    /* navbar — indigo-navy + SVG banded gradient */
+    --nav-bg:           #2d2d42;
+    --nav-gradient:     url('../images/gradient-medium.svg');
+    --nav-border:       #3e3e5a;
+    --nav-shadow:       0 2px 4px rgba(0,0,0,.25);
+
+    /* sidebar — lavender-gray (mkdocs #e4e4ed canvas) */
+    --sidebar-bg:       #e4e4ed;
+    --sidebar-border:   #bbbbd0;
+    --search-bg:        #eaeaf2;
+    --search-border:    #c8c8da;
+    --search-text:      #353544;
+    --search-icon:      #7070a0;
+    --search-placeholder: #9090b8;
+
+    /* worker cards — near-white lavender (mkdocs #f7f7fb) */
+    --card-bg:              #f7f7fb;
+    --card-border:          rgba(100,100,180,.18);
+    --card-hover-border:    #8888c0;
+    --card-text-muted:      #6666a0;
+    --card-text-title:      #2d2d42;
+    --card-selected-bg:     #edecf5;
+    --card-selected-border: #2d2d42;
+
+    /* inactive worker cards */
+    --card-inactive-border:    #b07080;
+    --card-inactive-badge-bg:  rgba(176,112,128,.15);
+    --card-inactive-badge-text:#8a3a4a;
+    --card-inactive-delete-bg: rgba(176,112,128,.12);
+    --card-inactive-delete-border: rgba(176,112,128,.5);
+
+    /* close-X */
+    --close-x-color:    #555575;
+
+    /* version badge — on dark navbar, use light colours */
+    --badge-border:     #8888b8;
+    --badge-color:      #c0c0e0;
+
+    /* host facts bar — on dark navbar */
+    --facts-value:      #e8e8f8;
+    --facts-label:      #a0a0c8;
+    --facts-divider:    rgba(255,255,255,.18);
+
+    /* theme toggle — on dark navbar */
+    --toggle-color:     #a0a0c8;
+    --toggle-hover:     #e8e8f8;
+
+    /* terminal area */
+    --terminal-bg:      #f2f2f8;
+    --logo-color:       #9090b8;
+    --logo-text:        #9090b8;
+
+    /* overlay */
+    --overlay-bg:       rgba(80,80,120,.85);
+    --overlay-popup-bg: rgba(45,45,66,.92);
+
+    /* body */
+    --body-bg:          #e8e8f0;
+
+    /* group colors — indigo-tinted for lavender bg */
+    --group-0: #bf5060;   /* red    */
+    --group-1: #b07838;   /* orange */
+    --group-2: #9a7820;   /* yellow */
+    --group-3: #4e8040;   /* green  */
+    --group-4: #308888;   /* teal   */
+    --group-5: #3c5cb8;   /* blue   */
+    --group-6: #7c3cb0;   /* violet */
+
+    --group-header-bg:   rgba(45,45,66,.06);
+    --group-header-text: #6666a0;
+    --group-header-hover:#edecf5;
 }
 
 [data-theme="light"] {
@@ -270,37 +345,35 @@ body {
     transition: color 0.25s ease, border-color 0.25s ease;
 }
 
-/* Theme toggle button */
+/* Theme toggle — round circle button cycling dark → medium → light */
 .dt-theme-toggle {
-    background: none;
-    border: none;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 2px solid var(--toggle-color);
+    background: transparent;
     cursor: pointer;
-    padding: 6px;
+    padding: 0;
     color: var(--toggle-color);
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
-    transition: color 0.2s ease;
-    line-height: 0;
+    transition: color 0.2s ease, border-color 0.2s ease;
+    flex-shrink: 0;
 }
 
 .dt-theme-toggle:hover {
     color: var(--toggle-hover);
+    border-color: var(--toggle-hover);
 }
 
 .dt-theme-toggle svg {
-    width: 20px;
-    height: 20px;
-    fill: currentColor;
+    width: 17px;
+    height: 17px;
 }
 
-/* Show moon in dark mode, sun in light mode */
-.icon-sun  { display: none; }
-.icon-moon { display: block; }
-
-[data-theme="light"] .icon-sun  { display: block; }
-[data-theme="light"] .icon-moon { display: none; }
+/* All theme icons hidden by default — JS in applyTheme() shows exactly one. */
+.icon-moon, .icon-half-sun, .icon-sun { display: none; }
 
 /* ── Main content (sidebar + terminal, fills remaining height) ────────────── */
 

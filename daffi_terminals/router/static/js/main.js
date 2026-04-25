@@ -378,6 +378,30 @@ const TERMINAL_THEMES = {
         cursorAccent:  '#2a2830',
         selectionBackground: 'rgba(160,160,192,.3)',
     },
+    medium: {
+        // Lavender-gray (mkdocs daffi light palette)
+        background:    '#f2f2f8',
+        foreground:    '#2d2d42',
+        cursor:        '#6666a0',
+        cursorAccent:  '#f2f2f8',
+        selectionBackground: 'rgba(100,100,180,.22)',
+        black:         '#2d2d42',
+        red:           '#bf5060',
+        green:         '#4e8040',
+        yellow:        '#9a7820',
+        blue:          '#3c5cb8',
+        magenta:       '#7c3cb0',
+        cyan:          '#308888',
+        white:         '#e8e8f0',
+        brightBlack:   '#555575',
+        brightRed:     '#a84050',
+        brightGreen:   '#3e7030',
+        brightYellow:  '#8a6818',
+        brightBlue:    '#2c4ca8',
+        brightMagenta: '#6c2ca0',
+        brightCyan:    '#257878',
+        brightWhite:   '#f7f7fb',
+    },
     light: {
         // Solarized Light
         background:    '#fdf6e3',
@@ -408,9 +432,17 @@ function currentTheme() {
     return document.documentElement.getAttribute('data-theme') || 'dark';
 }
 
+const THEME_ICON = { dark: 'icon-moon', medium: 'icon-half-sun', light: 'icon-sun' };
+
 function applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem(THEME_KEY, theme);
+
+    // Show exactly the one icon that matches this theme; hide the others.
+    ['icon-moon', 'icon-half-sun', 'icon-sun'].forEach(cls => {
+        const el = document.querySelector('.' + cls);
+        if (el) el.style.display = cls === THEME_ICON[theme] ? 'block' : 'none';
+    });
 
     // Update the active xterm.js terminal in real-time.
     // xterm.js v4 uses setOption(); v5+ also accepts options.theme directly.
@@ -427,9 +459,11 @@ function applyTheme(theme) {
     }
 }
 
+const THEME_CYCLE = ['dark', 'medium', 'light'];
+
 function initTheme() {
     const saved = localStorage.getItem(THEME_KEY);
-    applyTheme(saved === 'light' ? 'light' : 'dark');
+    applyTheme(THEME_CYCLE.includes(saved) ? saved : 'dark');
 }
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
@@ -438,10 +472,11 @@ window.addEventListener('load', () => {
     // Apply stored / default theme before anything else renders.
     initTheme();
 
-    // Wire up the toggle button.
+    // Wire up the toggle button — cycles dark → medium → light → dark.
     document.getElementById('theme-toggle').addEventListener('click', () => {
-        const current = document.documentElement.getAttribute('data-theme');
-        applyTheme(current === 'light' ? 'dark' : 'light');
+        const current = document.documentElement.getAttribute('data-theme') || 'dark';
+        const next = THEME_CYCLE[(THEME_CYCLE.indexOf(current) + 1) % THEME_CYCLE.length];
+        applyTheme(next);
     });
 
     // Populate the version badge — fallback to the in-HTML default "v1.0.0-debug"
