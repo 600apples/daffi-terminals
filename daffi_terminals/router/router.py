@@ -5,10 +5,10 @@ TermRouter @callback functions (called remotely by worker nodes):
   send_terminal_output(term_id, data)   → None   (PTY output → browser WebSocket)
   terminal_closed(term_id)             → None   (PTY session ended → close WebSocket)
 
-The TermRouter Client also registers an event handler so it learns about worker
-connect/disconnect events without any explicit "register" call from the worker.
-When a worker connects, the event handler fetches its metadata by calling
-get_worker_info() on it.
+The TermRouter Client registers ``on_member_added`` / ``on_member_removed``
+handlers so it learns about worker connect/disconnect events without any
+explicit "register" call from the worker.  When a worker connects,
+``_on_member_added`` fetches its metadata by calling get_worker_info() on it.
 """
 
 import time
@@ -90,7 +90,7 @@ class Worker:
         return asdict(self)
 
 
-# ─── daffi event handler (called from daffi's executor thread) ────────────────
+# ─── daffi member-lifecycle handlers (called from daffi's poller thread) ──────
 
 def _fetch_worker_info(member: str) -> None:
     """Background-thread job: fetch metadata for a freshly-connected worker.
@@ -139,40 +139,43 @@ def _fetch_worker_info(member: str) -> None:
     _worker_update_event.set()
 
 
-def _daffi_event_handler(event: dict) -> None:
-    """
-    Handle member connected / disconnected events.
+def _on_member_added(member: str) -> None:
+    """Called by daffi when a peer joins the network.
 
-    Connected  → schedule metadata fetch on router pool (never block the
-                 event-dispatch thread on an RPC).
-    Disconnected → mark the worker as inactive and signal the async observer.
+    Schedules a metadata fetch on the router pool — never blocks the
+    daffi event-dispatch thread on an RPC.  ``_fetch_worker_info`` sets
+    ``_worker_update_event`` once the data is ready, which triggers the
+    browser broadcast.
     """
-    event_type = event.get("type")
-    member = event.get("member", "")
-    logger.debug("daffi event: type=%s member=%s raw=%s", event_type, member, event)
-
-    # Ignore events for ourselves.
     if member == "TermRouter":
         return
+    logger.debug("member added: %s", member)
+    _router_pool.submit(_fetch_worker_info, member)
 
-    if event_type == "connected":
-        _router_pool.submit(_fetch_worker_info, member)
 
-    elif event_type == "disconnected":
-        worker = _workers.get(member)
-        if worker:
-            worker.active = False
-            logger.info("Worker disconnected: %s", worker)
+def _on_member_removed(member: str) -> None:
+    """Called by daffi when a peer leaves the network.
 
-        # Signal every open terminal session for this worker to close now.
-        # Without this, _pump_output blocks on queue.get() forever because
-        # the dead worker will never send terminal_closed().
-        for term_id in list(_worker_terminals.pop(member, set())):
-            q = _ws_queues.get(term_id)
-            if q is not None:
-                q.put_nowait(STOP_MARKER)
+    Marks the worker inactive, closes any open terminal sessions for that
+    worker, and signals the async observer to broadcast the updated list.
+    """
+    if member == "TermRouter":
+        return
+    logger.debug("member removed: %s", member)
 
-    # Signal the async update-workers observer regardless of event type.
+    worker = _workers.get(member)
+    if worker:
+        worker.active = False
+        logger.info("Worker disconnected: %s", worker)
+
+    # Signal every open terminal session for this worker to close now.
+    # Without this, _pump_output blocks on queue.get() forever because
+    # the dead worker will never send terminal_closed().
+    for term_id in list(_worker_terminals.pop(member, set())):
+        q = _ws_queues.get(term_id)
+        if q is not None:
+            q.put_nowait(STOP_MARKER)
+
     _worker_update_event.set()
 
 

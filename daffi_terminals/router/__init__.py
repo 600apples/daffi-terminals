@@ -13,7 +13,7 @@ def start_router(args: Namespace) -> None:
     Start the TermRouter process:
       1. Import router.py — this registers the TermRouter @callback functions.
       2. Start the daffi Router (native message-routing server).
-      3. Register the event handler, then connect the TermRouter daffi Client.
+      3. Register member-added/removed handlers, then connect the TermRouter daffi Client.
       4. Start the FastAPI web server (blocks until the process exits).
     """
     # Importing router.py triggers @callback registration for send_terminal_output
@@ -49,8 +49,9 @@ def start_router(args: Namespace) -> None:
         key_file=ssl_key,
     )
 
-    # Event handler MUST be registered before connect().
-    client.add_event_handler(_router_module._daffi_event_handler)
+    # Event handlers MUST be registered before connect().
+    client.on_member_added(_router_module._on_member_added)
+    client.on_member_removed(_router_module._on_member_removed)
 
     conn = client.connect()
 
