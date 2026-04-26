@@ -58,8 +58,6 @@ def start_router(args: Namespace) -> None:
     # Make the connection available to router.py's callbacks and WebHandler.
     _router_module._conn = conn
 
-    logger.info("TermRouter connected on %s:%s", rpc_host, rpc_port)
-
     # ── 3. FastAPI web server ─────────────────────────────────────────────────
     web_ssl_cert = getattr(args, "web_ssl_cert", None) or ""
     web_ssl_key  = getattr(args, "web_ssl_key",  None) or ""
@@ -71,8 +69,6 @@ def start_router(args: Namespace) -> None:
         ssl_cert=web_ssl_cert or None,
         ssl_key=web_ssl_key or None,
     )
-    scheme = "https" if use_web_tls else "http"
-    logger.info("Web UI available at %s://%s:%s", scheme, args.web_host, args.web_port)
     try:
         web_handler.run()  # blocks until the process is killed
     finally:
