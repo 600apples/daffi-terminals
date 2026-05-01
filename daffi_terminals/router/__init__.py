@@ -17,10 +17,11 @@ def start_router(args: Namespace) -> None:
       4. Start the FastAPI web server (blocks until the process exits).
     """
     # Importing router.py triggers @callback registration for send_terminal_output
-    # and terminal_closed.  This MUST happen before Client.connect().
+    # and terminal_closed.  This MUST happen before client.connect().
     import daffi_terminals.router.router as _router_module
 
-    from daffi import Router, Client
+    from daffi import Router
+    from daffi.aio import AsyncClient
 
     rpc_host = args.rpc_host
     rpc_port = int(args.rpc_port)
@@ -39,48 +40,40 @@ def start_router(args: Namespace) -> None:
     daffi_router.start()
     logger.info("daffi Router listening on %s:%s", rpc_host, rpc_port)
 
-    # ── 2. TermRouter Client ─────────────────────────────────────────────────
-    client = Client(
+    # ── 2. TermRouter AsyncClient ─────────────────────────────────────────────
+    client = AsyncClient(
         app_name="TermRouter",
         host=rpc_host,
         port=rpc_port,
         tls=use_tls,
         cert_file=ssl_cert,
         key_file=ssl_key,
+        workers=3,
     )
 
     # Event handlers MUST be registered before connect().
     client.on_member_added(_router_module._on_member_added)
     client.on_member_removed(_router_module._on_member_removed)
 
-    conn = client.connect()
-
-    # Make the connection available to router.py's callbacks and WebHandler.
-    _router_module._conn = conn
-
     # ── 3. FastAPI web server ─────────────────────────────────────────────────
     web_ssl_cert = getattr(args, "web_ssl_cert", None) or ""
     web_ssl_key  = getattr(args, "web_ssl_key",  None) or ""
-    use_web_tls  = bool(web_ssl_cert and web_ssl_key)
 
     web_handler = _router_module.WebHandler(
         web_host=args.web_host,
         web_port=int(args.web_port),
         ssl_cert=web_ssl_cert or None,
         ssl_key=web_ssl_key or None,
+        daffi_client=client,
     )
     try:
         web_handler.run()  # blocks until the process is killed
     finally:
         # Silence native stdout/stderr for the rest of the process.  daffi's
         # Zig transport logs "error.ReadError" from a background thread that
-        # only wakes up *after* client.stop()/daffi_router.stop() have
-        # returned — any restore-on-exit wrapper would race against that.
+        # only wakes up *after* daffi_router.stop() has returned — any
+        # restore-on-exit wrapper would race against that.
         silence_native_stdio()
-        try:
-            client.stop()
-        except Exception:
-            logger.debug("daffi Client.stop() raised", exc_info=True)
         try:
             daffi_router.stop()
         except Exception:

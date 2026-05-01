@@ -4,6 +4,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import uuid
 from argparse import Namespace
 
@@ -104,52 +105,131 @@ def start_worker(args: Namespace) -> None:
     ssl_key = getattr(args, "ssl_key", None) or ""
     use_tls = bool(ssl_cert and ssl_key)
 
-    client = Client(
-        app_name=worker_name,
-        host=args.rpc_host,
-        port=int(args.rpc_port),
-        tls=use_tls,
-        cert_file=ssl_cert,
-        key_file=ssl_key,
-        autoreconnect=True,
-        reconnect_delay=3.0,
-    )
-    # Set _GROUP before connect() so get_worker_info() returns the correct value.
-    # The router calls get_worker_info() immediately on the 'connected' event —
-    # if we set _GROUP after connect(), the router races and reads "" instead.
+    # Set _GROUP before the first connect() so get_worker_info() returns the
+    # correct value.  The router calls get_worker_info() immediately on the
+    # 'connected' event — setting it after connect() would lose the race.
     _worker_module._GROUP = getattr(args, "group", None) or ""
 
-    logger.debug(
-        "calling client.connect(): host=%s port=%s tls=%s autoreconnect=True",
-        args.rpc_host, args.rpc_port, use_tls,
-    )
-    conn = client.connect()
-    _worker_module._conn = conn
-    logger.debug("client.connect() returned: %r", conn)
+    RECONNECT_DELAY = 3.0
 
-    logger.info(
-        "%r connected to router at %s:%s", worker_name, args.rpc_host, args.rpc_port
-    )
+    def _make_client() -> Client:
+        return Client(
+            app_name=worker_name,
+            host=args.rpc_host,
+            port=int(args.rpc_port),
+            tls=use_tls,
+            cert_file=ssl_cert,
+            key_file=ssl_key,
+        )
 
-    # Block until Ctrl-C / SIGTERM, then tear daffi down cleanly so the
-    # router doesn't see a "error.ReadError" for a dead socket on our way
-    # out.  signal.pause() returns on any delivered signal; we install a
-    # no-op handler for SIGINT/SIGTERM so they interrupt pause() instead
-    # of tripping the default handler (which is what was aborting us
-    # abruptly).
-    logger.debug("entering signal.pause() (pid=%d)", os.getpid())
+    # _should_exit is set by the signal handler to break the reconnect loop.
+    # _current_client holds a mutable reference so the handler can always stop
+    # whichever client happens to be active at interrupt time.
+    _should_exit = threading.Event()
+    _current_client: list[Client] = [None]  # type: ignore[list-item]
 
     def _graceful_exit(signum, _frame):
         logger.debug("signal %d received; stopping daffi client", signum)
+        _should_exit.set()
+        try:
+            if _current_client[0] is not None:
+                _current_client[0].stop()
+        except Exception:
+            pass
 
     signal.signal(signal.SIGINT,  _graceful_exit)
     signal.signal(signal.SIGTERM, _graceful_exit)
 
+    logger.debug("entering reconnect loop (pid=%d)", os.getpid())
+
+    client: Client | None = None
+
+    def _fresh_connect() -> bool:
+        """Create a new Client and connect, storing it in *client* / *_current_client*.
+
+        Returns True on success, False if the exit signal is set.
+        Retries indefinitely (with RECONNECT_DELAY between attempts) until either
+        connected or the exit event fires.
+        """
+        nonlocal client
+        while not _should_exit.is_set():
+            if client is not None:
+                try:
+                    client.stop()
+                except Exception:
+                    pass
+            client = _make_client()
+            _current_client[0] = client
+            # daffi's Application.__init__ calls set_signal_handler() internally,
+            # which overwrites whatever SIGINT/SIGTERM handler was in place before.
+            # Re-install ours immediately so Ctrl-C always reaches _graceful_exit.
+            signal.signal(signal.SIGINT,  _graceful_exit)
+            signal.signal(signal.SIGTERM, _graceful_exit)
+            try:
+                logger.debug(
+                    "connecting: host=%s port=%s tls=%s",
+                    args.rpc_host, args.rpc_port, use_tls,
+                )
+                conn = client.connect()
+                _worker_module._conn = conn
+                return True
+            except Exception as exc:
+                logger.warning(
+                    "Connect failed (%s); retrying in %.1fs...", exc, RECONNECT_DELAY
+                )
+                _should_exit.wait(timeout=RECONNECT_DELAY)
+        return False
+
     try:
-        signal.pause()
+        if not _fresh_connect():
+            return  # exit signal arrived during initial connect retries
+
+        logger.info(
+            "%r connected to router at %s:%s", worker_name, args.rpc_host, args.rpc_port
+        )
+
+        while not _should_exit.is_set():
+            try:
+                # join() blocks until disconnect; it attempts one internal
+                # reconnect automatically before returning.
+                client.join()
+            except Exception as exc:
+                if _should_exit.is_set():
+                    break
+                logger.warning(
+                    "Connection lost (%s); reconnecting in %.1fs...",
+                    exc, RECONNECT_DELAY,
+                )
+                _should_exit.wait(timeout=RECONNECT_DELAY)
+            else:
+                if _should_exit.is_set():
+                    break
+                # join() returned normally.  If daffi's internal reconnect
+                # succeeded, _conn_num is still populated — loop back to
+                # re-join the same client without touching anything.
+                if client._conn_num is not None:
+                    continue
+                # Internal reconnect failed silently (no exception raised);
+                # fall through to do a full reconnect.
+                logger.info(
+                    "Connection lost; reconnecting in %.1fs...", RECONNECT_DELAY
+                )
+                _should_exit.wait(timeout=RECONNECT_DELAY)
+
+            if _should_exit.is_set():
+                break
+
+            if not _fresh_connect():
+                break
+
+            logger.info(
+                "%r reconnected to router at %s:%s",
+                worker_name, args.rpc_host, args.rpc_port,
+            )
     finally:
         silence_native_stdio()
-        try:
-            client.stop()
-        except Exception:
-            logger.debug("daffi Client.stop() raised", exc_info=True)
+        if client is not None:
+            try:
+                client.stop()
+            except Exception:
+                logger.debug("daffi Client.stop() raised", exc_info=True)

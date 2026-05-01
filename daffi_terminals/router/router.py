@@ -11,16 +11,16 @@ explicit "register" call from the worker.  When a worker connects,
 ``_on_member_added`` fetches its metadata by calling get_worker_info() on it.
 """
 
-import time
 import uuid
 import asyncio
 import logging
 from pathlib import Path
-from threading import Event
 from dataclasses import dataclass, asdict, field
 from contextlib import asynccontextmanager
-from concurrent.futures import ThreadPoolExecutor
-from typing import Dict
+from typing import TYPE_CHECKING, Dict
+
+if TYPE_CHECKING:
+    from daffi.aio import AsyncClient
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, APIRouter
@@ -37,46 +37,38 @@ logger = get_daffi_logger("router", colors.green)
 ROUTER_ROOT = Path(__file__).parent
 STOP_MARKER = None  # sentinel: put in queue to signal terminal session ended
 
-# ─── Shared state (set by start_router before the web server starts) ──────────
+# ─── Shared state (set by start_router / WebHandler lifespan) ────────────────
 
-_conn = None                              # daffi ClientConnection for TermRouter
-_event_loop: asyncio.AbstractEventLoop = None  # set in lifespan; used by sync callbacks
+_conn = None                              # daffi AsyncClientConnection for TermRouter
 _ws_queues: Dict[str, asyncio.Queue] = {}      # term_id → asyncio.Queue[bytes | None]
 _workers: Dict[str, "Worker"] = {}       # process_name → Worker
 _worker_terminals: Dict[str, set] = {}   # process_name → set of active term_ids
-_worker_update_event = Event()            # set by event/callback threads, waited by async observer
-_shutdown = Event()                       # set during lifespan shutdown to unblock executor threads
-
-# Dedicated executor for every blocking call the router dispatches via
-# run_in_executor().  We *must not* share asyncio's default executor here:
-# open terminals each keep a thread permanently parked in queue.get(), and
-# with the default pool size (min(32, cpu+4) = 12 on an 8-core laptop) that
-# quickly starves unrelated coroutines — facts requests and tab spawns would
-# stop working the moment the 13th tab opens.  64 threads is plenty of
-# headroom for hundreds of simultaneous PTY sessions.
-_router_pool = ThreadPoolExecutor(max_workers=64, thread_name_prefix="router-io")
+# Initialised to an asyncio.Event in WebHandler._lifespan (needs a running loop).
+# All setters (_on_member_added, _on_member_removed, _fetch_worker_info) run as
+# async tasks on that same loop, so plain asyncio.Event.set() is always safe.
+_worker_update_event: asyncio.Event
 
 
 # ─── @callback functions exposed to worker nodes ──────────────────────────────
 
 @callback
-def send_terminal_output(term_id: str, data: bytes):
+async def send_terminal_output(term_id: str, data: bytes):
     """Receive a PTY output chunk from a worker and queue it for the browser.
 
-    Called on daffi's poller thread (not the event loop thread), so we must
-    use call_soon_threadsafe to safely hand the item to the asyncio.Queue.
+    Runs as a coroutine on the event loop via AsyncTaskDispatcher, so
+    put_nowait is safe to call directly without call_soon_threadsafe.
     """
     q = _ws_queues.get(term_id)
     if q is not None:
-        _event_loop.call_soon_threadsafe(q.put_nowait, data)
+        q.put_nowait(data)
 
 
 @callback
-def terminal_closed(term_id: str):
+async def terminal_closed(term_id: str):
     """Worker signals that the PTY session has ended — unblock the WebSocket reader."""
     q = _ws_queues.get(term_id)
     if q is not None:
-        _event_loop.call_soon_threadsafe(q.put_nowait, STOP_MARKER)
+        q.put_nowait(STOP_MARKER)
 
 
 # ─── Worker metadata ──────────────────────────────────────────────────────────
@@ -96,22 +88,20 @@ class Worker:
 
 # ─── daffi member-lifecycle handlers (called from daffi's poller thread) ──────
 
-def _fetch_worker_info(member: str) -> None:
-    """Background-thread job: fetch metadata for a freshly-connected worker.
+async def _fetch_worker_info(member: str) -> None:
+    """Async task: fetch metadata for a freshly-connected worker.
 
-    Runs on the router's own thread pool — *never* on daffi's event-dispatch
-    thread.  Performing RPCs on the event thread can soft-deadlock a
-    reconnecting worker because the same thread must also deliver the
-    worker's callback-registration frames before the RPC can be satisfied.
-    A short retry loop absorbs the small window between `connected` firing
-    and the registrations becoming visible.
+    Spawned as an asyncio.Task from _on_member_added so it runs concurrently
+    without blocking the event-dispatch loop.  A short retry loop absorbs the
+    small window between 'connected' firing and the worker's callback
+    registrations becoming visible to the router.
     """
     attempts = 3
     delay = 0.5
     for attempt in range(1, attempts + 1):
         try:
             logger.debug("get_worker_info(%r) attempt %d …", member, attempt)
-            info = _conn.rpc(timeout=5, receiver=member).get_worker_info()
+            info = await _conn.rpc(timeout=5, receiver=member).get_worker_info()
             break
         except Exception as exc:
             if attempt == attempts:
@@ -121,7 +111,7 @@ def _fetch_worker_info(member: str) -> None:
                 "get_worker_info(%r) failed (%s); retry %d/%d in %.1fs",
                 member, exc, attempt, attempts, delay,
             )
-            time.sleep(delay)
+            await asyncio.sleep(delay)
             delay *= 2
 
     worker = Worker(
@@ -143,25 +133,24 @@ def _fetch_worker_info(member: str) -> None:
     _worker_update_event.set()
 
 
-def _on_member_added(member: str) -> None:
+async def _on_member_added(member: str) -> None:
     """Called by daffi when a peer joins the network.
 
-    Schedules a metadata fetch on the router pool — never blocks the
-    daffi event-dispatch thread on an RPC.  ``_fetch_worker_info`` sets
-    ``_worker_update_event`` once the data is ready, which triggers the
-    browser broadcast.
+    AsyncTaskDispatcher awaits async handlers, so this runs on the event loop.
+    _fetch_worker_info is fired as a separate Task so the handler returns
+    immediately without blocking event delivery for other members.
     """
     if member == "TermRouter":
         return
     logger.debug("member added: %s", member)
-    _router_pool.submit(_fetch_worker_info, member)
+    asyncio.create_task(_fetch_worker_info(member), name=f"fetch-info-{member}")
 
 
-def _on_member_removed(member: str) -> None:
+async def _on_member_removed(member: str) -> None:
     """Called by daffi when a peer leaves the network.
 
-    Marks the worker inactive, closes any open terminal sessions for that
-    worker, and signals the async observer to broadcast the updated list.
+    Runs on the event loop — asyncio.Queue.put_nowait and asyncio.Event.set
+    are safe to call directly without call_soon_threadsafe.
     """
     if member == "TermRouter":
         return
@@ -231,11 +220,13 @@ class WebHandler:
         web_port: int,
         ssl_cert: str | None = None,
         ssl_key:  str | None = None,
+        daffi_client: "AsyncClient | None" = None,
     ) -> None:
         self.web_host = web_host
         self.web_port = web_port
         self.ssl_cert = ssl_cert
         self.ssl_key  = ssl_key
+        self._daffi_client = daffi_client
         self._director_sockets: Dict[int, WebSocket] = {}
         self._terminal_sockets: Dict[int, WebSocket] = {}
         self.app = _CancelSafeASGI(self._build_app())
@@ -259,35 +250,33 @@ class WebHandler:
 
     @asynccontextmanager
     async def _lifespan(self, *_):
-        global _event_loop
-        # Capture the running event loop so synchronous daffi callbacks can
-        # safely hand items to asyncio.Queue via call_soon_threadsafe.
-        _event_loop = asyncio.get_running_loop()
+        global _conn, _worker_update_event
+
+        # asyncio.Event must be created with a running loop.  All setters
+        # (_on_member_added, _on_member_removed, _fetch_worker_info) run as
+        # async tasks on this same loop, so plain .set() is always safe.
+        _worker_update_event = asyncio.Event()
+
+        # Connect the AsyncClient on the uvicorn event loop.
+        conn = await self._daffi_client.connect()
+        _conn = conn
+
         observer = asyncio.create_task(self._worker_update_observer())
         yield
 
         # ── Shutdown sequence ────────────────────────────────────────────────
         # uvicorn will not force-close open WebSocket connections on shutdown;
-        # it just waits for their ASGI handlers to return (that's the
-        # "Waiting for background tasks to complete" spinner).  We must
-        # therefore proactively close every open WebSocket *and* unblock every
-        # pending coroutine before returning from the lifespan.
+        # it just waits for their ASGI handlers to return.  Proactively close
+        # every open WebSocket and unblock every pending coroutine first.
 
-        _shutdown.set()
-        _worker_update_event.set()   # unblock the observer's wait() call
-
-        # Wake every _pump_output coroutine blocked on queue.get() so their
-        # _terminal handlers proceed into their finally-block and exit.
-        # We're on the event loop here, so put_nowait is safe to call directly.
+        # Wake every _pump_output coroutine blocked on queue.get().
         for q in list(_ws_queues.values()):
             try:
                 q.put_nowait(STOP_MARKER)
             except Exception:
                 pass
 
-        # Force-close every open director/terminal WebSocket.  Both handlers
-        # are idle in iter_json()/iter_bytes() and will only return once the
-        # socket is closed.
+        # Force-close every open director/terminal WebSocket.
         for sock in list(self._director_sockets.values()):
             try:
                 await sock.close(code=1001)
@@ -304,7 +293,8 @@ class WebHandler:
             await asyncio.wait_for(asyncio.shield(observer), timeout=2.0)
         except (asyncio.CancelledError, asyncio.TimeoutError):
             pass
-        _router_pool.shutdown(wait=False, cancel_futures=True)
+
+        await self._daffi_client.stop()
 
     # ── HTTP ──────────────────────────────────────────────────────────────────
 
@@ -322,24 +312,17 @@ class WebHandler:
     async def _worker_facts(self, worker_id: str):
         """Fetch host facts live from the worker on demand (never cached).
 
-        Uses a short RPC timeout and wraps the blocking call in
-        ``asyncio.wait_for`` so that a slow/unresponsive worker can never
-        pin an executor thread past the point at which the client has
-        moved on.  Without this guard, rapid tab-switching against a
-        stalled worker quickly saturates the default threadpool and the
-        whole router becomes unresponsive.
+        Awaits the async RPC directly — no executor thread needed.
+        asyncio.wait_for cancels the RPC coroutine if the worker is slow,
+        preventing a stalled node from blocking the router indefinitely.
         """
         worker = _workers.get(worker_id)
         if not worker or not worker.active:
             return {}
-        loop = asyncio.get_event_loop()
         rpc_timeout = 3
         try:
             facts = await asyncio.wait_for(
-                loop.run_in_executor(
-                    _router_pool,
-                    lambda: _conn.rpc(timeout=rpc_timeout, receiver=worker_id).get_host_facts(),
-                ),
+                _conn.rpc(timeout=rpc_timeout, receiver=worker_id).get_host_facts(),
                 timeout=rpc_timeout + 1,
             )
             return facts or {}
@@ -400,14 +383,10 @@ class WebHandler:
         _worker_terminals.setdefault(worker_id, set()).add(term_id)
         tid = id(websocket)
         self._terminal_sockets[tid] = websocket
-        loop = asyncio.get_event_loop()
 
         # Tell the worker to start a PTY for this session.
         try:
-            await loop.run_in_executor(
-                _router_pool,
-                lambda: _conn.rpc(timeout=10, receiver=worker_id).start_terminal(term_id),
-            )
+            await _conn.rpc(timeout=10, receiver=worker_id).start_terminal(term_id)
         except Exception as exc:
             logger.error("start_terminal on %r failed: %s", worker_id, exc)
             _ws_queues.pop(term_id, None)
@@ -443,26 +422,20 @@ class WebHandler:
                     continue
                 cmd, body = payload[0], payload[1:]
                 if cmd == 0x01:  # DATA
-                    await loop.run_in_executor(
-                        _router_pool,
-                        lambda b=body: _conn.rpc_nowait(receiver=worker_id)
-                        .receive_terminal_input(term_id, b),
+                    await _conn.rpc_nowait(receiver=worker_id).receive_terminal_input(
+                        term_id, body
                     )
                 elif cmd == 0x02:  # RESIZE
                     try:
                         rows, cols = map(int, body.decode().split(","))
-                        await loop.run_in_executor(
-                            _router_pool,
-                            lambda r=rows, c=cols: _conn.rpc_nowait(receiver=worker_id)
-                            .resize_terminal(term_id, r, c),
+                        await _conn.rpc_nowait(receiver=worker_id).resize_terminal(
+                            term_id, rows, cols
                         )
                     except (ValueError, UnicodeDecodeError):
                         pass
         except (WebSocketDisconnect, RuntimeError, asyncio.CancelledError):
             pass
         finally:
-            # Signal _pump_output to exit. We're on the event loop so
-            # put_nowait is safe to call directly (no call_soon_threadsafe needed).
             try:
                 queue.put_nowait(STOP_MARKER)
             except Exception:
@@ -472,10 +445,7 @@ class WebHandler:
             _worker_terminals.get(worker_id, set()).discard(term_id)
             self._terminal_sockets.pop(tid, None)
             try:
-                await loop.run_in_executor(
-                    _router_pool,
-                    lambda: _conn.rpc_nowait(receiver=worker_id).stop_terminal(term_id),
-                )
+                await _conn.rpc_nowait(receiver=worker_id).stop_terminal(term_id)
             except Exception:
                 pass
 
@@ -492,25 +462,17 @@ class WebHandler:
 
     async def _worker_update_observer(self):
         """
-        Bridge between the sync daffi event-handler thread and the async
-        FastAPI world.  Waits for _worker_update_event (set by the event
-        handler or callbacks) then broadcasts the updated worker list.
+        Await _worker_update_event (an asyncio.Event set by async member
+        handlers and callbacks), then broadcast the updated worker list.
+        Runs until cancelled by the lifespan shutdown sequence.
         """
-        loop = asyncio.get_running_loop()
-
-        def _wait():
-            """Poll with a timeout so the thread exits promptly on shutdown."""
-            while not _shutdown.is_set():
-                if _worker_update_event.wait(timeout=0.5):
-                    return True
-            return False
-
-        while True:
-            triggered = await loop.run_in_executor(_router_pool, _wait)
-            if not triggered:
-                break
-            _worker_update_event.clear()
-            await self._broadcast_workers()
+        try:
+            while True:
+                await _worker_update_event.wait()
+                _worker_update_event.clear()
+                await self._broadcast_workers()
+        except asyncio.CancelledError:
+            pass
 
     # ── entry point ───────────────────────────────────────────────────────────
 
