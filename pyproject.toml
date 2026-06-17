@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "daffi-terminals"
 description = "Remote terminal control"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 keywords = [
     "rpc",
@@ -47,7 +47,7 @@ classifiers = [
 dependencies = [
     "fastapi>=0.95.0",
     "uvicorn[standard]>=0.21.1",
-    "daffi",
+    "daffi==3.0.0",
 ]
 dynamic = [
     "version",
