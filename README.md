@@ -1,6 +1,6 @@
 # daffi-terminals
 
-![demo](docs/demo.gif)
+![demo](https://raw.githubusercontent.com/600apples/daffi-terminals/main/docs/demo.gif)
 
 A lightweight, browser-based remote terminal manager.
 Connect any number of Linux/macOS hosts to a central router and open
@@ -114,7 +114,7 @@ the worker hosts.
 
 ### Worker groups
 
-![groups](docs/groups.png)
+![groups](https://raw.githubusercontent.com/600apples/daffi-terminals/main/docs/groups.png)
 
 Workers can be organized into named groups using the `--group` flag.
 Each group gets a distinct color and appears as a collapsible section in the sidebar,
