@@ -1,34 +1,84 @@
 <!DOCTYPE html>
 <html lang="en">
-   <head>
-      <meta charset="UTF-8">
-      <title> Daffi Terminals </title>
-      <link rel="icon" type="image/x-icon" href="static/favicon.ico">
-      <link href="static/css/main.css" rel="stylesheet" type="text/css"/>
-      <link href="static/css/xterm.min.css" rel="stylesheet" type="text/css"/>
-      <link href="static/css/fullscreen.min.css" rel="stylesheet" type="text/css"/>
-   </head>
-   <body>
-      <div class="main-container">
-         <div class="disconnected-overlay">
-            <div class="disconnected-overlay-popup">DISCONNECTED</div>
-         </div>
-         <header class="terminal-mdc-navigation" role="banner">
-            <nav class="main-nav" role="navigation">
-               <ul class="unstyled terminal-worker-mdc-container" id="terminal-list"></ul>
-            </nav>
-         </header>
-         <div class="terminal-container">
-            <div class="terminal" id="terminal">
-               <div class="logo">
-                  <div>Daffi <span>Terminals</span></div>
-               </div>
-            </div>
-         </div>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daffi Terminals</title>
+  <link rel="icon" type="image/x-icon" href="static/favicon.ico">
+  <link href="static/css/main.css"           rel="stylesheet">
+  <link href="static/css/xterm.min.css"      rel="stylesheet">
+  <link href="static/css/fullscreen.min.css" rel="stylesheet">
+</head>
+<body>
+<div class="app-wrapper">
+
+  <!-- ── Top navigation bar ─────────────────────────────────────────────── -->
+  <nav class="dt-navbar">
+    <!-- Host facts — populated by JS when a worker card is selected -->
+    <div class="dt-host-facts" id="host-facts"></div>
+
+    <div class="dt-navbar-right">
+    <!-- Theme toggle — cycles dark → medium → light → dark -->
+    <button class="dt-theme-toggle" id="theme-toggle" title="Switch theme" aria-label="Switch theme">
+      <!-- Moon — shown in dark mode -->
+      <svg class="icon-moon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"
+              style="stroke:currentColor;stroke-width:2;stroke-linecap:round;fill:currentColor"/>
+      </svg>
+      <!-- Half-sun (sunrise) — shown in medium mode -->
+      <svg class="icon-half-sun" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 3v2M5.22 5.22l1.42 1.42M2.5 12.5h2M19.5 12.5h2M17.36 6.64l1.42-1.42"/>
+        <path d="M5 17.5A7 7 0 0 1 19 17.5"/>
+        <line x1="2" y1="17.5" x2="22" y2="17.5"/>
+        <style>path,line{stroke:currentColor;stroke-width:2;stroke-linecap:round;fill:none}</style>
+      </svg>
+      <!-- Full sun — shown in light mode -->
+      <svg class="icon-sun" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42
+                 M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+        <style>circle,path{stroke:currentColor;stroke-width:2;stroke-linecap:round;fill:none}circle{fill:currentColor}</style>
+      </svg>
+    </button>
+
+    <!-- Version badge -->
+    <span class="dt-navbar-version" id="version-badge">v1.0.0-debug</span>
+    </div><!-- .dt-navbar-right -->
+  </nav>
+
+  <!-- ── Disconnected overlay ───────────────────────────────────────────── -->
+  <div class="disconnected-overlay">
+    <div class="disconnected-overlay-popup">DISCONNECTED</div>
+  </div>
+
+  <!-- ── Main content (sidebar + terminal) ─────────────────────────────── -->
+  <div class="main-container">
+    <header class="terminal-mdc-navigation" role="banner">
+      <div class="sidebar-search">
+        <svg class="sidebar-search-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="22" y2="22"/>
+        </svg>
+        <input id="worker-search" type="text" placeholder="search by name or mac…" autocomplete="off" spellcheck="false">
       </div>
-      <script src="static/js/popper.min.js"></script>
-      <script src="static/js/xterm.min.js"></script>
-      <script src="static/js/xterm-addon-fit.min.js"></script>
-      <script src="static/js/main.js"></script>
-   </body>
+      <nav class="main-nav" role="navigation">
+        <ul class="unstyled terminal-worker-mdc-container" id="terminal-list"></ul>
+      </nav>
+    </header>
+
+    <div class="terminal-container">
+      <div class="terminal" id="terminal">
+        <div class="logo">
+          <div>Daffi <span>Terminals</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- .app-wrapper -->
+
+<script src="static/js/popper.min.js"></script>
+<script src="static/js/xterm.min.js"></script>
+<script src="static/js/xterm-addon-fit.min.js"></script>
+<script src="static/js/main.js"></script>
+</body>
 </html>

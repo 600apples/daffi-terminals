@@ -1,10 +1,243 @@
 @import url("https://fonts.googleapis.com/css?family=Roboto:100,300,400,400i,500,500i,700,900");
-@import url("https://cdn.materialdesignicons.com/2.0.46/css/materialdesignicons.min.css");
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Theme tokens
+   ─────────────────────────────────────────────────────────────────────────
+   Dark   (default) — navy/charcoal + SVG gradient header
+   Medium           — lavender-gray palette (mkdocs daffi light scheme)
+   Light            — Solarized Light warm-pastel palette
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+    /* navbar */
+    --nav-bg:           #191c24;
+    --nav-gradient:     url('../images/gradient.svg');
+    --nav-border:       #2a3b4f;
+    --nav-shadow:       0 2px 4px rgba(0,0,0,.35);
+
+    /* sidebar */
+    --sidebar-bg:       #000000;
+    --sidebar-border:   #979393;
+    --search-bg:        #1a1a22;
+    --search-border:    #2e2e3a;
+    --search-text:      #c8c8d8;
+    --search-icon:      #5a5a72;
+    --search-placeholder: #4a4a5e;
+
+    /* worker cards */
+    --card-bg:              #373738;
+    --card-border:          rgba(255,255,255,.125);
+    --card-hover-border:    #979393;
+    --card-text-muted:      #6c757d;
+    --card-text-title:      #ffffff;
+    --card-selected-bg:     #3e3e42;
+    --card-selected-border: rgba(255,255,255,.78);
+
+    /* inactive worker cards */
+    --card-inactive-border:    #8b4a4a;
+    --card-inactive-badge-bg:  rgba(130,60,60,.28);
+    --card-inactive-badge-text:#c08888;
+    --card-inactive-delete-bg: rgba(139,74,74,.18);
+    --card-inactive-delete-border: rgba(200,120,120,.55);
+
+    /* close-X pseudo-element */
+    --close-x-color:    #F0F0F0;
+
+    /* version badge */
+    --badge-border:     #6c7293;
+    --badge-color:      #6c7293;
+
+    /* host facts bar */
+    --facts-value:      #d8d8e8;
+    --facts-label:      #7a7a9a;
+    --facts-divider:    rgba(255,255,255,.12);
+
+    /* theme-toggle button */
+    --toggle-color:     #6c7293;
+    --toggle-hover:     #aab2d0;
+
+    /* terminal area */
+    --terminal-bg:      #2a2830;
+    --logo-color:       #5a5a6a;
+    --logo-text:        #5a5a6a;
+
+    /* overlay */
+    --overlay-bg:       rgba(108,113,120,.91);
+    --overlay-popup-bg: #4d5591d9;
+
+    /* body */
+    --body-bg:          #11131a;
+
+    /* group colors — 7-color rainbow (muted, works on dark bg) */
+    --group-0: #e06c75;   /* red    */
+    --group-1: #d19a66;   /* orange */
+    --group-2: #e5c07b;   /* yellow */
+    --group-3: #98c379;   /* green  */
+    --group-4: #56b6c2;   /* teal   */
+    --group-5: #61afef;   /* blue   */
+    --group-6: #c678dd;   /* violet */
+
+    --group-header-bg:   rgba(255,255,255,.04);
+    --group-header-text: #9090aa;
+    --group-header-hover:#b0b0cc;
+}
+
+[data-theme="medium"] {
+    /* navbar — indigo-navy + SVG banded gradient */
+    --nav-bg:           #2d2d42;
+    --nav-gradient:     url('../images/gradient-medium.svg');
+    --nav-border:       #3e3e5a;
+    --nav-shadow:       0 2px 4px rgba(0,0,0,.25);
+
+    /* sidebar — lavender-gray (mkdocs #e4e4ed canvas) */
+    --sidebar-bg:       #e4e4ed;
+    --sidebar-border:   #bbbbd0;
+    --search-bg:        #eaeaf2;
+    --search-border:    #c8c8da;
+    --search-text:      #353544;
+    --search-icon:      #7070a0;
+    --search-placeholder: #9090b8;
+
+    /* worker cards — near-white lavender (mkdocs #f7f7fb) */
+    --card-bg:              #f7f7fb;
+    --card-border:          rgba(100,100,180,.18);
+    --card-hover-border:    #8888c0;
+    --card-text-muted:      #6666a0;
+    --card-text-title:      #2d2d42;
+    --card-selected-bg:     #edecf5;
+    --card-selected-border: #2d2d42;
+
+    /* inactive worker cards */
+    --card-inactive-border:    #b07080;
+    --card-inactive-badge-bg:  rgba(176,112,128,.15);
+    --card-inactive-badge-text:#8a3a4a;
+    --card-inactive-delete-bg: rgba(176,112,128,.12);
+    --card-inactive-delete-border: rgba(176,112,128,.5);
+
+    /* close-X */
+    --close-x-color:    #555575;
+
+    /* version badge — on dark navbar, use light colours */
+    --badge-border:     #8888b8;
+    --badge-color:      #c0c0e0;
+
+    /* host facts bar — on dark navbar */
+    --facts-value:      #e8e8f8;
+    --facts-label:      #a0a0c8;
+    --facts-divider:    rgba(255,255,255,.18);
+
+    /* theme toggle — on dark navbar */
+    --toggle-color:     #a0a0c8;
+    --toggle-hover:     #e8e8f8;
+
+    /* terminal area */
+    --terminal-bg:      #f2f2f8;
+    --logo-color:       #9090b8;
+    --logo-text:        #9090b8;
+
+    /* overlay */
+    --overlay-bg:       rgba(80,80,120,.85);
+    --overlay-popup-bg: rgba(45,45,66,.92);
+
+    /* body */
+    --body-bg:          #e8e8f0;
+
+    /* group colors — indigo-tinted for lavender bg */
+    --group-0: #bf5060;   /* red    */
+    --group-1: #b07838;   /* orange */
+    --group-2: #9a7820;   /* yellow */
+    --group-3: #4e8040;   /* green  */
+    --group-4: #308888;   /* teal   */
+    --group-5: #3c5cb8;   /* blue   */
+    --group-6: #7c3cb0;   /* violet */
+
+    --group-header-bg:   rgba(45,45,66,.06);
+    --group-header-text: #6666a0;
+    --group-header-hover:#edecf5;
+}
+
+[data-theme="light"] {
+    /* navbar — pastel warm SVG gradient */
+    --nav-bg:           #ddd5c3;
+    --nav-gradient:     url('../images/gradient-light.svg');
+    --nav-border:       #c8bfae;
+    --nav-shadow:       0 2px 4px rgba(0,0,0,.12);
+
+    /* sidebar */
+    --sidebar-bg:       #eee8d5;
+    --sidebar-border:   #b5aa96;
+    --search-bg:        #e4dcc8;
+    --search-border:    #c8bfaa;
+    --search-text:      #4a4a54;
+    --search-icon:      #93a1a1;
+    --search-placeholder: #a0998a;
+
+    /* worker cards */
+    --card-bg:              #fdf6e3;
+    --card-border:          rgba(147,161,161,.3);
+    --card-hover-border:    #93a1a1;
+    --card-text-muted:      #93a1a1;
+    --card-text-title:      #586e75;
+    --card-selected-bg:     #e8dfc9;
+    --card-selected-border: #4a4a54;
+
+    /* inactive worker cards */
+    --card-inactive-border:    #c0706a;
+    --card-inactive-badge-bg:  rgba(192,112,106,.15);
+    --card-inactive-badge-text:#9a4040;
+    --card-inactive-delete-bg: rgba(192,112,106,.12);
+    --card-inactive-delete-border: rgba(192,112,106,.55);
+
+    /* close-X pseudo-element */
+    --close-x-color:    #657b83;
+
+    /* version badge */
+    --badge-border:     #93a1a1;
+    --badge-color:      #657b83;
+
+    /* host facts bar */
+    --facts-value:      #2e3a3f;
+    --facts-label:      #4a6268;
+    --facts-divider:    rgba(0,0,0,.15);
+
+    /* theme-toggle button */
+    --toggle-color:     #93a1a1;
+    --toggle-hover:     #586e75;
+
+    /* terminal area — Solarized Light */
+    --terminal-bg:      #fdf6e3;
+    --logo-color:       #93a1a1;
+    --logo-text:        #93a1a1;
+
+    /* overlay */
+    --overlay-bg:       rgba(147,161,161,.85);
+    --overlay-popup-bg: rgba(101,123,131,.88);
+
+    /* body */
+    --body-bg:          #fdf6e3;
+
+    /* group colors — slightly desaturated for light bg */
+    --group-0: #c0706a;
+    --group-1: #b8834a;
+    --group-2: #a08030;
+    --group-3: #5a8a48;
+    --group-4: #3a8a8a;
+    --group-5: #3a72b8;
+    --group-6: #8a4ab8;
+
+    --group-header-bg:   rgba(0,0,0,.04);
+    --group-header-text: #7a7060;
+    --group-header-hover:#4a4a54;
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
 
 body {
     margin: 0;
     height: 100vh;
-    font-family: Roboto;
+    font-family: Roboto, sans-serif;
+    background: var(--body-bg);
+    transition: background 0.25s ease;
 }
 
 .unstyled {
@@ -13,55 +246,366 @@ body {
     margin: 0;
 }
 
-.terminal-mdc-navigation {
-    width: 16.6em;
-    background: black;
-    border-right: 1px solid #979393;
-    height: 100%;
-    max-height: 100%;
-    overflow: auto;
+/* ── App shell ────────────────────────────────────────────────────────────── */
+
+.app-wrapper {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
 }
 
+/* ── Top navigation bar ───────────────────────────────────────────────────── */
+
+.dt-navbar {
+    background-color: var(--nav-bg);
+    background-image: var(--nav-gradient);
+    background-size: cover;
+    background-repeat: no-repeat;
+    background-position: center;
+    border-bottom: 1px solid var(--nav-border);
+    box-shadow: var(--nav-shadow);
+    height: 70px;
+    min-height: 70px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    gap: 12px;
+    flex-shrink: 0;
+    width: 100%;
+    box-sizing: border-box;
+    z-index: 100;
+    transition: background-color 0.25s ease, border-color 0.25s ease;
+}
+
+/* Right-side group (toggle + version) */
+.dt-navbar-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-shrink: 0;
+}
+
+/* Host facts strip — left side of navbar */
+.dt-host-facts {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.dt-host-facts:empty::before {
+    content: '';   /* no placeholder text — just stays invisible when empty */
+}
+
+.dt-fact {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 14px;
+    border-right: 1px solid var(--facts-divider);
+    white-space: nowrap;
+    transition: border-color 0.25s ease;
+}
+
+.dt-fact:first-child {
+    padding-left: 4px;
+}
+
+.dt-fact-label {
+    font-size: 0.63rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--facts-label);
+    transition: color 0.25s ease;
+}
+
+.dt-fact-value {
+    font-family: monospace;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--facts-value);
+    transition: color 0.25s ease;
+}
+
+/* Version badge */
+.dt-navbar-version {
+    border: 2px solid var(--badge-border);
+    padding: 4px 12px;
+    border-radius: 3px;
+    color: var(--badge-color);
+    font-size: 0.82rem;
+    font-family: monospace;
+    letter-spacing: 0.3px;
+    min-width: 4em;
+    text-align: center;
+    transition: color 0.25s ease, border-color 0.25s ease;
+}
+
+/* Theme toggle — round circle button cycling dark → medium → light */
+.dt-theme-toggle {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 2px solid var(--toggle-color);
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    color: var(--toggle-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s ease, border-color 0.2s ease;
+    flex-shrink: 0;
+}
+
+.dt-theme-toggle:hover {
+    color: var(--toggle-hover);
+    border-color: var(--toggle-hover);
+}
+
+.dt-theme-toggle svg {
+    width: 17px;
+    height: 17px;
+}
+
+/* All theme icons hidden by default — JS in applyTheme() shows exactly one. */
+.icon-moon, .icon-half-sun, .icon-sun { display: none; }
+
+/* ── Main content (sidebar + terminal, fills remaining height) ────────────── */
+
+.main-container {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    gap: 1px;              /* invisible 1 px breath between sidebar and terminal */
+    position: relative;
+}
+
+/* ── Sidebar search bar ───────────────────────────────────────────────────── */
+
+.sidebar-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--search-bg);
+    border-bottom: 1px solid var(--search-border);
+    flex-shrink: 0;
+    transition: background 0.25s ease, border-color 0.25s ease;
+}
+
+.sidebar-search-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    color: var(--search-icon);
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    fill: none;
+    transition: color 0.25s ease;
+}
+
+#worker-search {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 0.78rem;
+    font-family: Roboto, sans-serif;
+    color: var(--search-text);
+    caret-color: var(--search-text);
+    transition: color 0.25s ease;
+}
+
+#worker-search::placeholder {
+    color: var(--search-placeholder);
+}
+
+/* ── Worker sidebar ───────────────────────────────────────────────────────── */
+
+.terminal-mdc-navigation {
+    width: 16.6em;
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--sidebar-border);
+    height: 100%;
+    max-height: 100%;
+    overflow: hidden;          /* outer — search bar stays fixed at top */
+    display: flex;
+    flex-direction: column;
+    transition: background 0.25s ease, border-color 0.25s ease;
+}
+
+.main-nav {
+    flex: 1;
+    overflow-y: auto;          /* only the card list scrolls */
+    overflow-x: hidden;
+    scrollbar-gutter: stable;  /* reserves space so cards never shift when bar appears */
+}
+
+/* Thin, unobtrusive sidebar scrollbar */
+.main-nav::-webkit-scrollbar        { width: 4px; }
+.main-nav::-webkit-scrollbar-track  { background: transparent; }
+.main-nav::-webkit-scrollbar-thumb  { background: var(--sidebar-border); border-radius: 2px; }
+.main-nav { scrollbar-width: thin; scrollbar-color: var(--sidebar-border) transparent; }
+
 .terminal-worker-mdc-container {
-    display: -ms-flexbox;
     display: flex;
     margin: auto;
-    -ms-flex: 0 0 auto;
     flex: 0 0 auto;
-    -ms-flex-wrap: wrap;
     flex-wrap: wrap;
-    -ms-flex-pack: justify;
     justify-content: center;
     width: 100%;
     flex-direction: column;
 }
 
 .terminal-worker-mdc {
-    border: 1px solid #ffffff20;
-    background: #373738;
-    color: #6c757d;
-    display: -ms-inline-flexbox;
+    border: 2px solid var(--card-border);  /* constant width — never shifts layout */
+    background: var(--card-bg);
+    color: var(--card-text-muted);
     display: inline-flex;
-    -ms-flex-pack: distribute;
     justify-content: flex-start;
     min-height: 100px;
     min-width: 200px;
     margin: 8px;
-    -ms-flex-align: center;
     align-items: center !important;
     width: 15em;
     position: relative;
     cursor: pointer;
+    transition: background 0.25s ease, border-color 0.25s ease;
 }
 
 .terminal-worker-mdc:hover {
-    border-left: 3px solid #979393;
-    margin-left: 6px;
+    border-left-color: var(--card-hover-border);  /* colour-only, no geometry change */
 }
 
 .selected {
-    outline: 1px ridge white;
-    background: #373738;
+    border: 2px solid var(--card-selected-border) !important;
+    background: var(--card-selected-bg);
+    box-shadow: 0 0 6px rgba(255,255,255,.08);
+    cursor: default !important;
+}
+
+/* ── Group sections ───────────────────────────────────────────────────────── */
+
+.group-section {
+    list-style: none;
+    margin: 6px 0 2px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.group-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 6px;
+    cursor: pointer;
+    user-select: none;
+    border-left: 3px solid;    /* color set per group via inline style */
+    background: var(--group-header-bg);
+    border-radius: 0 3px 3px 0;
+    transition: background 0.15s ease;
+    margin: 0 8px 0 8px;
+}
+
+.group-header:hover { background: var(--group-header-hover); }
+
+.group-toggle {
+    flex-shrink: 0;
+    width: 10px;
+    height: 10px;
+    position: relative;
+    transition: transform 0.2s ease;
+}
+
+.group-toggle::before {
+    content: '';
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 5px;
+    height: 5px;
+    border-right: 1.5px solid var(--group-header-text);
+    border-bottom: 1.5px solid var(--group-header-text);
+    transform: rotate(45deg);   /* ↓ expanded */
+    transition: transform 0.2s ease;
+}
+
+.group-toggle.collapsed::before {
+    transform: rotate(-45deg);  /* → collapsed */
+    top: 3px;
+}
+
+.group-label {
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--group-header-text);
+}
+
+.group-count {
+    font-size: 0.65rem;
+    color: var(--group-header-text);
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.group-workers {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+    max-height: 9999px;           /* large value — animatable */
+    transition: max-height 0.25s ease, opacity 0.2s ease;
+    opacity: 1;
+}
+
+.group-workers.collapsed {
+    max-height: 0;
+    opacity: 0;
+}
+
+/* Accent left border on group member cards */
+.group-member { border-left-width: 3px !important; }
+
+/* ── Inactive worker cards ────────────────────────────────────────────────── */
+
+.worker-inactive {
+    border: 2px solid var(--card-inactive-border) !important;
+    cursor: default !important;
+}
+
+.worker-inactive:hover {
+    border-color: var(--card-inactive-border);  /* already 2px, just keep the same colour */
+}
+
+.worker-disconnected-badge {
+    position: absolute;
+    top: 0;
+    left: 0;
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: var(--card-inactive-badge-text);
+    background: var(--card-inactive-badge-bg);
+    padding: 2px 7px;
+    border-bottom-right-radius: 4px;
+    pointer-events: none;
+    transition: background 0.25s ease, color 0.25s ease;
 }
 
 .terminal-worker-mdc-icon {
@@ -81,7 +625,8 @@ body {
     overflow: hidden;
 }
 
-.terminal-mdc-card h4, .terminal-mdc-card p {
+.terminal-mdc-card h4,
+.terminal-mdc-card p {
     margin: 0;
     padding: 1px;
     text-overflow: ellipsis;
@@ -90,19 +635,46 @@ body {
 }
 
 .terminal-mdc-card h4 {
-    color: #fff;
+    color: var(--card-text-title);
     font-weight: normal;
+    transition: color 0.25s ease;
 }
 
+/* ── Terminal area ────────────────────────────────────────────────────────── */
+
+.terminal-container {
+    flex-grow: 1;
+    color: #6e6e6e;
+    overflow: hidden;   /* clip xterm's own scroll chrome at the container level */
+}
+
+.terminal {
+    overflow: hidden;
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: var(--terminal-bg);
+}
+
+/* xterm.js injects .xterm and .xterm-viewport — style its scrollbar to match
+   the sidebar, and keep it from leaking outside the terminal container. */
+.terminal .xterm                              { height: 100%; }
+.terminal .xterm-viewport                     { overflow-y: auto !important; }
+.terminal .xterm-viewport::-webkit-scrollbar        { width: 4px; }
+.terminal .xterm-viewport::-webkit-scrollbar-track  { background: transparent; }
+.terminal .xterm-viewport::-webkit-scrollbar-thumb  { background: var(--sidebar-border); border-radius: 2px; }
+.terminal .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--sidebar-border) transparent; }
+
+/* Placeholder logo shown before any terminal is opened */
 .logo {
     text-transform: lowercase;
     font: 300 2em "Source Sans Pro", Helvetica, Arial, sans-serif;
     text-align: center;
+    color: var(--logo-color);
     position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-
 }
 
 .logo div {
@@ -116,14 +688,50 @@ body {
     font-weight: 700;
 }
 
-.main-container {
-    width: 100%;
-    height: 100vh;
-    padding: 0;
-    margin: 0 auto;
+/* ── Close-X button on inactive worker cards ──────────────────────────────── */
+
+.close-terminal {
+    position: absolute;
+    top: 0;              /* flush with the card's inner top-right corner */
+    right: 0;
     display: flex;
-    position: relative;
+    align-items: center;
+    justify-content: center;
+    padding: 5px;
+    border-radius: 0;
+    background: var(--card-inactive-delete-bg);
+    border: none;
+    border-left:   1px solid var(--card-inactive-delete-border);
+    border-bottom: 1px solid var(--card-inactive-delete-border);
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+    font-size: 0;
+    flex-shrink: 0;
 }
+
+.close-terminal:hover {
+    background: var(--card-inactive-badge-bg);
+    border-color: var(--card-inactive-border);
+}
+
+.close-terminal:before,
+.close-terminal:after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 2px;
+    height: 11px;
+    background-color: var(--card-inactive-badge-text);
+    transform: rotate(45deg) translate(-50%, -50%);
+    transform-origin: top left;
+    content: '';
+}
+
+.close-terminal:after {
+    transform: rotate(-45deg) translate(-50%, -50%);
+}
+
+/* ── Disconnected overlay ─────────────────────────────────────────────────── */
 
 .disconnected-overlay {
     position: absolute;
@@ -131,7 +739,7 @@ body {
     right: 0;
     top: 0;
     bottom: 0;
-    background: #6c7178e8;
+    background: var(--overlay-bg);
     z-index: 9999;
     display: none;
     text-align: center;
@@ -145,55 +753,6 @@ body {
     left: calc(50% - 50px);
     padding: 40px;
     border-radius: 2px;
-    background: #4d5591d9;
-}
-
-.terminal-container {
-    flex-grow: 1;
-    color: #6e6e6e !important;
-}
-
-.terminal {
-    overflow: hidden;
-    position: relative;
-    width: 100%;
-    height: 100vh;
-    background: #2a2830;
-}
-
-.close-terminal {
-    position: absolute;
-    top: -11px;
-    right: -12px;
-    display: block;
-    width: 50px;
-    height: 50px;
-    font-size: 0;
-}
-
-.close-terminal:before,
-.close-terminal:after {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 5px;
-    height: 20px;
-    background-color: #F0F0F0;
-    transform: rotate(45deg) translate(-50%, -50%);
-    transform-origin: top left;
-    content: '';
-}
-
-.close-terminal:after {
-    transform: rotate(-45deg) translate(-50%, -50%);
-}
-
-.close-terminal:before,
-.close-terminal:after {
-    width: 2px;
-}
-
-.close-terminal:before,
-.close-terminal:after {
-    height: 12px;
+    background: var(--overlay-popup-bg);
+    color: #ffffff;
 }

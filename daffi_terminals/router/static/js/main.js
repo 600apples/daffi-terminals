@@ -1,213 +1,496 @@
+'use strict';
+
+// Base WebSocket URL derived from the current page URL.
+// Uses location.protocol so http → ws and https → wss without string tricks.
 const WSURL = (() => {
-    let urlBase = window.location.href.split(/\?|#/, 1)[0].replace('http', 'ws');
-    return urlBase + (urlBase[urlBase.length - 1] === '/' ? '' : '/');
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const path  = location.pathname.endsWith('/') ? location.pathname : location.pathname + '/';
+    return `${proto}//${location.host}${path}`;
 })();
 
-let terminalSock;
+// Binary protocol command bytes sent as the first byte of each WS frame.
+const CMD_DATA   = 0x01;  // keyboard input
+const CMD_RESIZE = 0x02;  // terminal resize
 
-const DATA = 1;
-const RESIZE = 2; // To be implemented
+// ── Host facts bar ───────────────────────────────────────────────────────────
 
-window.onload = async () => {
-    await new DirectorSocket().start();
-};
+function showHostFacts(facts) {
+    const bar = document.getElementById('host-facts');
+    if (!bar) return;
+    if (!facts || !Object.keys(facts).length) { bar.innerHTML = ''; return; }
 
+    const mem    = (facts.mem_total_mb && facts.mem_free_mb)
+        ? `${facts.mem_free_mb} / ${facts.mem_total_mb} MB` : null;
+    const distro = [facts.distro, facts.distro_version].filter(Boolean).join(' ') || null;
+    const osName = distro || facts.os || null;
+
+    // Each entry is [label, value] — falsy values are dropped automatically.
+    const items = [
+        ['host',   facts.hostname  || null],
+        ['os',     osName],
+        ['kernel', facts.kernel    || null],
+        ['arch',   facts.arch      || null],
+        ['cpu',    facts.cpu_count ? `${facts.cpu_count} cores` : null],
+        ['mem',    mem],
+        ['uptime', facts.uptime    || null],
+    ].filter(([, v]) => v != null);
+
+    bar.innerHTML = items.map(([label, value]) =>
+        `<span class="dt-fact">
+            <span class="dt-fact-label">${label}</span>
+            <span class="dt-fact-value">${value}</span>
+         </span>`
+    ).join('');
+}
+
+function clearHostFacts() {
+    const bar = document.getElementById('host-facts');
+    if (bar) bar.innerHTML = '';
+}
+
+// ── Director socket ──────────────────────────────────────────────────────────
+// Keeps the worker sidebar in sync.  Reconnects automatically on drop.
 
 class DirectorSocket {
-    async start() {
-        let directorUrl = WSURL + 'director';
-        this.sock = new WebSocket(directorUrl);
-        this.sock.onmessage = this.onmessage;
-        this.sock.onerror = this.onerror;
-        this.sock.onclose = this.onclose;
+    constructor() {
+        this._sock    = null;
+        this._workers = [];   // full unfiltered list, kept for search re-renders
     }
 
-    onmessage(msg) {
-        let data = JSON.parse(msg.data);
-        let terminalListUl = document.getElementById("terminal-list");
-        terminalListUl.innerHTML = '';
-        for (var i = 0; i < data.length; i++) {
-            let worker = data[i];
-            let fillColor = worker.active ? '#007bff' : '#ff3a11';
-            let workerItem = document.createElement("li");
-            workerItem.className = "terminal-worker-mdc";
-            workerItem.id = worker.process_name;
-            workerItem.innerHTML = `<div class="terminal-worker-mdc-icon">
-                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-                                            <g>
-                                                <path fill="none" d="M0 0h24v24H0z"/>
-                                                <path fill="${fillColor}"
-                                                d="M11 12l-7.071 7.071-1.414-1.414L8.172 12 2.515 6.343 3.929 4.93 11 12zm0 7h10v2H11v-2z"/>
-                                            </g>
-                                        </svg>
-                                    </div>
-                                    <div class="terminal-mdc-card">
-                                        <h4>${worker.process_name}</h4>
-                                        <p>host: ${worker.host}</p>
-                                        <p>mac: ${worker.mac}</p>
-                                    </div>`;
+    connect() {
+        this._sock = new WebSocket(WSURL + 'director');
 
-            if (worker.active) {
-                workerItem.onclick = createTerminal;
-            } else {
-                let workerCloseButton = document.createElement("a");
-                workerCloseButton.className = "close-terminal";
-                workerCloseButton.role = "button";
-                workerItem.prepend(workerCloseButton);
+        this._sock.onopen = () => {
+            document.querySelector('.disconnected-overlay').style.display = 'none';
+        };
 
-                workerCloseButton.onclick = (ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    let targetLi = ev.target.closest(".terminal-worker-mdc");
-                    this.send(JSON.stringify({
-                        "command": "delete_terminal",
-                        "term_id": targetLi.id,
-                    }))
-                };
-            }
-            terminalListUl.appendChild(workerItem);
+        this._sock.onmessage = ({ data }) => {
+            this._workers = JSON.parse(data);
+            console.log('[director] workers:', this._workers.map(w => ({ name: w.process_name, group: w.group })));
+            this._renderWorkers(this._filterWorkers());
+        };
 
+        this._sock.onerror = (e) => console.error('[director] socket error:', e);
+
+        this._sock.onclose = () => {
+            document.querySelector('.disconnected-overlay').style.display = 'block';
+            setTimeout(() => this.connect(), 3000);
+        };
+
+        // Search input — re-render on every keystroke.
+        const searchEl = document.getElementById('worker-search');
+        if (searchEl) {
+            searchEl.addEventListener('input', () => {
+                this._renderWorkers(this._filterWorkers());
+            });
         }
     }
 
-    onerror(e) {
-        console.error(e);
-    };
-
-    onclose(e) {
-        console.log("Director socket has been closed.");
-        // pop up disconnected overlay.
-        document.querySelector(".disconnected-overlay").style.display = "block";
-    };
-}
-
-
-async function createTerminal(ev) {
-    ev.preventDefault();
-    ev.stopPropagation();
-
-    let targetLi = ev.target.closest(".terminal-worker-mdc");
-    if (targetLi.className.includes("selected")) {
-        console.log("This terminal is already active");
-        return
-    }
-
-    if (terminalSock) {
-        terminalSock.close()
-    }
-    let workerId = targetLi.id;
-
-    Array.prototype.slice.call(document.querySelectorAll('.terminal-worker-mdc')).forEach(function (element) {
-        element.classList.remove('selected');
-    });
-    // add the selected class to the element that was clicked
-    targetLi.classList.add('selected');
-
-    let terminalUrl = WSURL + `terminal?worker_id=${workerId}`;
-    terminalSock = new WebSocket(terminalUrl);
-
-    let encoding = 'utf-8';
-    let decoder = TextDecoder ? new TextDecoder(encoding) : encoding;
-    let termOptions = {
-        cursorBlink: true,
-        theme: {
-            background: 'black',
-            foreground: 'white'
+    send(obj) {
+        if (this._sock && this._sock.readyState === WebSocket.OPEN) {
+            this._sock.send(JSON.stringify(obj));
         }
-    };
-
-    let terminal = new Terminal(termOptions);
-
-    terminal.fitAddon = new FitAddon.FitAddon();
-    terminal.loadAddon(terminal.fitAddon);
-
-
-    terminalSock.onopen = () => {
-        let terminalElem = document.getElementById('terminal');
-        terminal.open(terminalElem);
-        terminal.fitAddon.fit();
-
-        terminal.focus();
-
-        terminal.onData(function (data) {
-            terminalSock.send(new Blob([DATA, data]));
-        });
-
-    };
-
-    terminalSock.onmessage = function (msg) {
-        read_file_as_text(msg.data, term_write, decoder);
-    };
-
-
-    terminalSock.onclose = function (e) {
-        terminal.dispose();
-        Array.prototype.slice.call(document.querySelectorAll('.terminal-worker-mdc')).forEach(function (element) {
-            element.classList.remove('selected');
-        });
-    };
-
-
-    function read_as_text_with_encoding(file, callback, encoding) {
-        var reader = new window.FileReader();
-
-        if (encoding === undefined) {
-            encoding = 'utf-8';
-        }
-
-        reader.onload = function () {
-            if (callback) {
-                callback(reader.result);
-            }
-        };
-
-        reader.onerror = function (e) {
-            console.error(e);
-        };
-
-        reader.readAsText(file, encoding);
     }
 
-
-    function read_as_text_with_decoder(file, callback, decoder) {
-        var reader = new window.FileReader();
-
-        if (decoder === undefined) {
-            decoder = new window.TextDecoder('utf-8', {'fatal': true});
-        }
-
-        reader.onload = function () {
-            var text;
-            try {
-                text = decoder.decode(reader.result);
-            } catch (TypeError) {
-                console.log('Decoding error happened.');
-            } finally {
-                if (callback) {
-                    callback(text);
-                }
-            }
-        };
-
-        reader.onerror = function (e) {
-            console.error(e);
-        };
-        reader.readAsArrayBuffer(file);
+    /** Return workers whose name or MAC contains the current search query. */
+    _filterWorkers() {
+        const q = (document.getElementById('worker-search')?.value ?? '').trim().toLowerCase();
+        if (!q) return this._workers;
+        return this._workers.filter(w =>
+            w.process_name.toLowerCase().includes(q) ||
+            w.mac.toLowerCase().includes(q)
+        );
     }
 
+    // Deterministic color index 0-6 from a group name string.
+    _groupColor(name) {
+        let h = 0;
+        for (const c of name) h = Math.imul(h * 31 + c.charCodeAt(0), 1) | 0;
+        return Math.abs(h) % 7;
+    }
 
-    function read_file_as_text(file, callback, decoder) {
-        if (!window.TextDecoder) {
-            read_as_text_with_encoding(file, callback, decoder);
+    // Resolve the CSS color value for a group index.
+    _groupColorVal(idx) {
+        return getComputedStyle(document.documentElement)
+            .getPropertyValue(`--group-${idx}`).trim();
+    }
+
+    // Build a single worker <li> card.
+    _makeCard(worker, groupColor) {
+        const iconColor = worker.active ? '#007bff' : '#c0706a';
+        const li = document.createElement('li');
+        li.id        = worker.process_name;
+        li.className = 'terminal-worker-mdc' +
+            (worker.active  ? '' : ' worker-inactive') +
+            (groupColor     ? ' group-member'          : '');
+        if (groupColor) li.style.borderLeftColor = groupColor;
+
+        li.innerHTML = `
+            <div class="terminal-worker-mdc-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                    <g>
+                        <path fill="none" d="M0 0h24v24H0z"/>
+                        <path fill="${iconColor}"
+                              d="M11 12l-7.071 7.071-1.414-1.414L8.172 12
+                                 2.515 6.343 3.929 4.93 11 12zm0 7h10v2H11v-2z"/>
+                    </g>
+                </svg>
+            </div>
+            <div class="terminal-mdc-card">
+                <h4>${worker.process_name}</h4>
+                <p>host: ${worker.host}</p>
+                <p>mac:  ${worker.mac}</p>
+            </div>`;
+
+        if (worker.active) {
+            li.onclick = (ev) => TerminalSession.open(ev, worker.process_name);
         } else {
-            read_as_text_with_decoder(file, callback, decoder);
+            const badge = document.createElement('span');
+            badge.className   = 'worker-disconnected-badge';
+            badge.textContent = 'disconnected';
+            li.appendChild(badge);
+
+            const btn = document.createElement('a');
+            btn.className = 'close-terminal';
+            btn.role      = 'button';
+            btn.title     = 'Remove from list';
+            btn.onclick   = (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                this.send({ command: 'delete_terminal', term_id: worker.process_name });
+            };
+            li.appendChild(btn);
         }
+        return li;
     }
 
+    _renderWorkers(workers) {
+        const list     = document.getElementById('terminal-list');
+        list.innerHTML = '';
+        const activeId = TerminalSession._current?._workerId ?? null;
 
-    function term_write(text) {
-        if (terminal) {
-            terminal.write(text);
+        // Split into ungrouped (top) and groups (bottom, alphabetically sorted).
+        const ungrouped = workers.filter(w => !w.group);
+        const groupMap  = new Map();
+        for (const w of workers) {
+            if (w.group) {
+                if (!groupMap.has(w.group)) groupMap.set(w.group, []);
+                groupMap.get(w.group).push(w);
+            }
+        }
+        const sortedGroups = [...groupMap.keys()].sort();
+
+        // ── Ungrouped workers (no section wrapper) ────────────────────────────
+        for (const worker of ungrouped) {
+            const card = this._makeCard(worker, null);
+            if (worker.process_name === activeId) card.classList.add('selected');
+            list.appendChild(card);
+        }
+
+        // ── Grouped workers — skip groups that are empty after search filtering ──
+        for (const groupName of sortedGroups.filter(g => groupMap.get(g).length > 0)) {
+            const colorIdx = this._groupColor(groupName);
+            const color    = this._groupColorVal(colorIdx);
+            const workers  = groupMap.get(groupName);
+
+            const storageKey  = `group-collapsed:${groupName}`;
+            const isCollapsed = localStorage.getItem(storageKey) === '1';
+
+            // Section wrapper (a plain <li> acts as a structural container).
+            const section = document.createElement('li');
+            section.className    = 'group-section';
+            section.dataset.group = groupName;
+
+            // Group header.
+            const header = document.createElement('div');
+            header.className = 'group-header';
+            header.style.borderLeftColor = color;
+            header.innerHTML = `
+                <span class="group-toggle${isCollapsed ? ' collapsed' : ''}"></span>
+                <span class="group-label">${groupName}</span>
+                <span class="group-count">${workers.length}</span>`;
+
+            // Collapsible worker list.
+            const subList = document.createElement('ul');
+            subList.className = 'group-workers unstyled' + (isCollapsed ? ' collapsed' : '');
+
+            for (const worker of workers) {
+                const card = this._makeCard(worker, color);
+                if (worker.process_name === activeId) card.classList.add('selected');
+                subList.appendChild(card);
+            }
+
+            header.addEventListener('click', () => {
+                const nowCollapsed = !subList.classList.contains('collapsed');
+                subList.classList.toggle('collapsed', nowCollapsed);
+                header.querySelector('.group-toggle').classList.toggle('collapsed', nowCollapsed);
+                localStorage.setItem(storageKey, nowCollapsed ? '1' : '0');
+            });
+
+            section.appendChild(header);
+            section.appendChild(subList);
+            list.appendChild(section);
         }
     }
 }
+
+// ── Terminal session ─────────────────────────────────────────────────────────
+// One live xterm.js instance connected to a worker PTY via WebSocket.
+
+class TerminalSession {
+    static _current = null;
+
+    /**
+     * Open a new terminal session for the given worker, closing any existing one.
+     * @param {MouseEvent} ev
+     * @param {string} workerId
+     */
+    static open(ev, workerId) {
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        const li = ev.target.closest('.terminal-worker-mdc');
+
+        // No-op if this session is already the active one.
+        if (li.classList.contains('selected')) return;
+        if (TerminalSession._current?._workerId === workerId) return;
+
+        // close() will deselect the old card via _cleanup().
+        TerminalSession._current?.close();
+
+        li.classList.add('selected');
+
+        // Fetch host facts live from the worker so uptime/mem are always fresh.
+        clearHostFacts();
+        fetch(`/api/workers/${encodeURIComponent(workerId)}/facts`)
+            .then(r => r.ok ? r.json() : {})
+            .then(facts => { try { showHostFacts(facts); } catch (_) {} })
+            .catch(() => {});
+
+        const session = new TerminalSession(workerId);
+        TerminalSession._current = session;
+        session.start();
+    }
+
+    constructor(workerId) {
+        this._workerId       = workerId;
+        this._sock           = null;
+        this._terminal       = null;
+        this._resizeObserver = null;
+    }
+
+    start() {
+        this._sock            = new WebSocket(`${WSURL}terminal?worker_id=${this._workerId}`);
+        this._sock.binaryType = 'arraybuffer';
+
+        // Build terminal without a theme first so xterm initialises its renderer,
+        // then apply the theme via setOption (v4) or options (v5) to guarantee
+        // the palette is wired up regardless of xterm.js version.
+        this._terminal = new Terminal({ cursorBlink: true });
+        if (typeof this._terminal.setOption === 'function') {
+            this._terminal.setOption('theme', TERMINAL_THEMES[currentTheme()]);
+        } else {
+            this._terminal.options.theme = TERMINAL_THEMES[currentTheme()];
+        }
+
+        const fitAddon = new FitAddon.FitAddon();
+        this._terminal.loadAddon(fitAddon);
+
+        this._sock.onopen = () => {
+            const container = document.getElementById('terminal');
+            this._terminal.open(container);
+
+            // ── Register ALL handlers BEFORE fitAddon.fit() ──────────────────
+            // fitAddon.fit() calls terminal.resize() which fires onResize
+            // synchronously.  If onResize is registered after fit(), the very
+            // first resize event (which sets the initial PTY window size) is lost.
+
+            this._terminal.onData((data) => {
+                if (this._sock.readyState !== WebSocket.OPEN) return;
+                const encoded = new TextEncoder().encode(data);
+                const frame   = new Uint8Array(1 + encoded.length);
+                frame[0]      = CMD_DATA;
+                frame.set(encoded, 1);
+                this._sock.send(frame.buffer);
+            });
+
+            this._terminal.onResize(({ rows, cols }) => {
+                if (this._sock.readyState !== WebSocket.OPEN) return;
+                const encoded = new TextEncoder().encode(`${rows},${cols}`);
+                const frame   = new Uint8Array(1 + encoded.length);
+                frame[0]      = CMD_RESIZE;
+                frame.set(encoded, 1);
+                this._sock.send(frame.buffer);
+            });
+
+            // Now fit — onResize fires here and the handler above catches it.
+            fitAddon.fit();
+            this._terminal.focus();
+
+            // Refit whenever the container changes size (window resize, etc.).
+            this._resizeObserver = new ResizeObserver(() => fitAddon.fit());
+            this._resizeObserver.observe(container);
+        };
+
+        // PTY output → write raw bytes directly to xterm (no string conversion).
+        this._sock.onmessage = ({ data }) => {
+            this._terminal?.write(new Uint8Array(data));
+        };
+
+        this._sock.onclose = () => this._cleanup();
+        this._sock.onerror = (e) => console.error('[terminal] socket error:', e);
+    }
+
+    close() {
+        this._sock?.close();
+        this._cleanup();
+    }
+
+    _cleanup() {
+        this._resizeObserver?.disconnect();
+        this._resizeObserver = null;
+
+        this._terminal?.dispose();
+        this._terminal = null;
+
+        this._sock = null;
+
+        // Only deselect this session's own card — leave other cards untouched.
+        document.getElementById(this._workerId)?.classList.remove('selected');
+
+        if (TerminalSession._current === this) {
+            TerminalSession._current = null;
+            try { clearHostFacts(); } catch (_) {}
+        }
+    }
+}
+
+// ── Theme switcher ───────────────────────────────────────────────────────────
+
+const THEME_KEY = 'dt-theme';
+
+// xterm.js colour palettes for each theme.
+const TERMINAL_THEMES = {
+    dark: {
+        background:    '#2a2830',
+        foreground:    '#d0d0e0',
+        cursor:        '#a0a0c0',
+        cursorAccent:  '#2a2830',
+        selectionBackground: 'rgba(160,160,192,.3)',
+    },
+    medium: {
+        // Lavender-gray (mkdocs daffi light palette)
+        background:    '#f2f2f8',
+        foreground:    '#2d2d42',
+        cursor:        '#6666a0',
+        cursorAccent:  '#f2f2f8',
+        selectionBackground: 'rgba(100,100,180,.22)',
+        black:         '#2d2d42',
+        red:           '#bf5060',
+        green:         '#4e8040',
+        yellow:        '#9a7820',
+        blue:          '#3c5cb8',
+        magenta:       '#7c3cb0',
+        cyan:          '#308888',
+        white:         '#e8e8f0',
+        brightBlack:   '#555575',
+        brightRed:     '#a84050',
+        brightGreen:   '#3e7030',
+        brightYellow:  '#8a6818',
+        brightBlue:    '#2c4ca8',
+        brightMagenta: '#6c2ca0',
+        brightCyan:    '#257878',
+        brightWhite:   '#f7f7fb',
+    },
+    light: {
+        // Solarized Light
+        background:    '#fdf6e3',
+        foreground:    '#657b83',
+        cursor:        '#586e75',
+        cursorAccent:  '#fdf6e3',
+        selectionBackground: '#eee8d5',
+        black:         '#073642',
+        red:           '#dc322f',
+        green:         '#c0706a',  // pastel red  (normal green slot)
+        yellow:        '#b58900',
+        blue:          '#4a4a54',  // pastel black (normal blue slot)
+        magenta:       '#d33682',
+        cyan:          '#2aa198',
+        white:         '#eee8d5',
+        brightBlack:   '#002b36',
+        brightRed:     '#cb4b16',
+        brightGreen:   '#c0706a',  // pastel red  — bold green → user@hostname
+        brightYellow:  '#657b83',
+        brightBlue:    '#4a4a54',  // pastel black — bold blue  → ~/path$
+        brightMagenta: '#6c71c4',
+        brightCyan:    '#93a1a1',
+        brightWhite:   '#fdf6e3',
+    },
+};
+
+function currentTheme() {
+    return document.documentElement.getAttribute('data-theme') || 'dark';
+}
+
+const THEME_ICON = { dark: 'icon-moon', medium: 'icon-half-sun', light: 'icon-sun' };
+
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem(THEME_KEY, theme);
+
+    // Show exactly the one icon that matches this theme; hide the others.
+    ['icon-moon', 'icon-half-sun', 'icon-sun'].forEach(cls => {
+        const el = document.querySelector('.' + cls);
+        if (el) el.style.display = cls === THEME_ICON[theme] ? 'block' : 'none';
+    });
+
+    // Update the active xterm.js terminal in real-time.
+    // xterm.js v4 uses setOption(); v5+ also accepts options.theme directly.
+    // We try setOption first (v4), then fall back to options assignment (v5).
+    const term = TerminalSession._current && TerminalSession._current._terminal;
+    if (term) {
+        if (typeof term.setOption === 'function') {
+            term.setOption('theme', TERMINAL_THEMES[theme]);
+        } else {
+            term.options.theme = TERMINAL_THEMES[theme];
+        }
+        // Force a full redraw so existing buffer text adopts the new colours.
+        term.refresh(0, term.rows - 1);
+    }
+}
+
+const THEME_CYCLE = ['dark', 'medium', 'light'];
+
+function initTheme() {
+    const saved = localStorage.getItem(THEME_KEY);
+    applyTheme(THEME_CYCLE.includes(saved) ? saved : 'dark');
+}
+
+// ── Bootstrap ────────────────────────────────────────────────────────────────
+
+window.addEventListener('load', () => {
+    // Apply stored / default theme before anything else renders.
+    initTheme();
+
+    // Wire up the toggle button — cycles dark → medium → light → dark.
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+        const current = document.documentElement.getAttribute('data-theme') || 'dark';
+        const next = THEME_CYCLE[(THEME_CYCLE.indexOf(current) + 1) % THEME_CYCLE.length];
+        applyTheme(next);
+    });
+
+    // Populate the version badge — fallback to the in-HTML default "v1.0.0-debug"
+    // if the endpoint is unreachable or returns an unexpected shape.
+    fetch('/api/version')
+        .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(data => {
+            const version = data && data.version;
+            if (version) {
+                const badge = document.getElementById('version-badge');
+                if (badge) badge.textContent = `v${version}`;
+            }
+        })
+        .catch(() => { /* keep the in-HTML default */ });
+
+    new DirectorSocket().connect();
+});
