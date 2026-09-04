@@ -3,7 +3,7 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Theme tokens
    ─────────────────────────────────────────────────────────────────────────
-   Dark   (default) — navy/charcoal + SVG gradient header
+   Dark   (default) — navy/charcoal
    Medium           — lavender-gray palette (mkdocs daffi light scheme)
    Light            — Solarized Light warm-pastel palette
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -11,7 +11,6 @@
 :root {
     /* navbar */
     --nav-bg:           #191c24;
-    --nav-gradient:     url('../images/gradient.svg');
     --nav-border:       #2a3b4f;
     --nav-shadow:       0 2px 4px rgba(0,0,0,.35);
 
@@ -83,9 +82,8 @@
 }
 
 [data-theme="medium"] {
-    /* navbar — indigo-navy + SVG banded gradient */
+    /* navbar — indigo-navy */
     --nav-bg:           #2d2d42;
-    --nav-gradient:     url('../images/gradient-medium.svg');
     --nav-border:       #3e3e5a;
     --nav-shadow:       0 2px 4px rgba(0,0,0,.25);
 
@@ -157,9 +155,8 @@
 }
 
 [data-theme="light"] {
-    /* navbar — pastel warm SVG gradient */
+    /* navbar — pastel warm */
     --nav-bg:           #ddd5c3;
-    --nav-gradient:     url('../images/gradient-light.svg');
     --nav-border:       #c8bfae;
     --nav-shadow:       0 2px 4px rgba(0,0,0,.12);
 
@@ -259,10 +256,6 @@ body {
 
 .dt-navbar {
     background-color: var(--nav-bg);
-    background-image: var(--nav-gradient);
-    background-size: cover;
-    background-repeat: no-repeat;
-    background-position: center;
     border-bottom: 1px solid var(--nav-border);
     box-shadow: var(--nav-shadow);
     height: 70px;
