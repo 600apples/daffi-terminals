@@ -97,13 +97,20 @@ def start_worker(args: Namespace) -> None:
         _worker_module._helper_sock = helper_sock
         _worker_module._helper_proc = helper_proc
 
-    from daffi import Client
+    from daffi import Client, TCPTransport
 
     worker_name = args.name or f"{socket.gethostname()}-0x{uuid.uuid4().hex[:8]}"
 
     ssl_cert = getattr(args, "ssl_cert", None) or ""
     ssl_key = getattr(args, "ssl_key", None) or ""
+    # Same gate as the router CLI: both flags enable TLS.  On the client the
+    # certificate is the CA trust material (self-signed setups share the
+    # router's cert); the key is unused for outbound TLS.
     use_tls = bool(ssl_cert and ssl_key)
+    tcp_kwargs = {}
+    if use_tls:
+        tcp_kwargs = {"tls": True, "ca": ssl_cert}
+    transport = TCPTransport(args.rpc_host, int(args.rpc_port), **tcp_kwargs)
 
     # Set _GROUP before the first connect() so get_worker_info() returns the
     # correct value.  The router calls get_worker_info() immediately on the
@@ -115,11 +122,7 @@ def start_worker(args: Namespace) -> None:
     def _make_client() -> Client:
         return Client(
             app_name=worker_name,
-            host=args.rpc_host,
-            port=int(args.rpc_port),
-            tls=use_tls,
-            cert_file=ssl_cert,
-            key_file=ssl_key,
+            transport=transport,
         )
 
     # _should_exit is set by the signal handler to break the reconnect loop.

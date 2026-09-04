@@ -1,9 +1,12 @@
 from argparse import Namespace
+import os
+import shutil
+import tempfile
 
 from daffi.utils.logger import get_daffi_logger
 from daffi.utils import colors
 
-from daffi_terminals._utils import silence_native_stdio
+from daffi_terminals._utils import generate_self_signed_tls, silence_native_stdio
 
 logger = get_daffi_logger("router", colors.green)
 
@@ -20,7 +23,7 @@ def start_router(args: Namespace) -> None:
     # and terminal_closed.  This MUST happen before client.connect().
     import daffi_terminals.router.router as _router_module
 
-    from daffi import Router
+    from daffi import Router, Runtime, TCPTransport, UnixTransport
     from daffi.aio import AsyncClient
 
     rpc_host = args.rpc_host
@@ -29,26 +32,36 @@ def start_router(args: Namespace) -> None:
     ssl_key = getattr(args, "ssl_key", None) or ""
     use_tls = bool(ssl_cert and ssl_key)
 
+    tcp_kwargs = {}
+    if use_tls:
+        tcp_kwargs = {"tls": True, "cert": ssl_cert, "key": ssl_key}
+    tcp_transport = TCPTransport(rpc_host, rpc_port, **tcp_kwargs)
+    sock_dir = tempfile.mkdtemp(prefix="daffi-terminals-")
+    unix_path = os.path.join(sock_dir, "router.sock")
+    local_cert, local_key = generate_self_signed_tls(days=3650)
+    unix_transport = UnixTransport(
+        unix_path,
+        tls=True,
+        cert=local_cert,
+        key=local_key,
+        ca=local_cert,
+    )
+
     # ── 1. daffi Router ──────────────────────────────────────────────────────
     daffi_router = Router(
-        host=rpc_host,
-        port=rpc_port,
-        tls=use_tls,
-        cert_file=ssl_cert,
-        key_file=ssl_key,
+        transport=[tcp_transport, unix_transport],
+        runtime=Runtime.EVENTED,
     )
     daffi_router.start()
-    logger.info("daffi Router listening on %s:%s", rpc_host, rpc_port)
+    logger.info("daffi Router listening on %s", tcp_transport.describe())
 
-    # ── 2. TermRouter AsyncClient ─────────────────────────────────────────────
+    # ── 2. TermRouter AsyncClient (local Unix + ephemeral TLS) ────────────────
+    # Connect over the Unix listener.
     client = AsyncClient(
         app_name="TermRouter",
-        host=rpc_host,
-        port=rpc_port,
-        tls=use_tls,
-        cert_file=ssl_cert,
-        key_file=ssl_key,
+        transport=unix_transport,
         workers=3,
+        runtime=Runtime.EVENTED,
     )
 
     # Event handlers MUST be registered before connect().
@@ -78,3 +91,7 @@ def start_router(args: Namespace) -> None:
             daffi_router.stop()
         except Exception:
             logger.debug("daffi Router.stop() raised", exc_info=True)
+        try:
+            shutil.rmtree(sock_dir, ignore_errors=True)
+        except Exception:
+            pass
