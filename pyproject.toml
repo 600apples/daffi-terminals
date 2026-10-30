@@ -33,7 +33,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Topic :: Internet",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -47,7 +46,8 @@ classifiers = [
 dependencies = [
     "fastapi>=0.95.0",
     "uvicorn[standard]>=0.21.1",
-    "daffi==3.0.0",
+    "daffi==4.0.0",
+    "cryptography>=41.0.0",
 ]
 dynamic = [
     "version",
