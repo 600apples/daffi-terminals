@@ -1,6 +1,6 @@
 # daffi-terminals
 
-![demo](docs/demo.gif)
+![demo](https://raw.githubusercontent.com/600apples/daffi-terminals/main/docs/demo.gif)
 
 A lightweight, browser-based remote terminal manager.
 Connect any number of Linux/macOS hosts to a central router and open
