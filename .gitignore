@@ -167,3 +167,4 @@ venv.bak/
 
 # Generated TLS certificates — never commit private keys
 examples/ssl/certs/
+/a.out

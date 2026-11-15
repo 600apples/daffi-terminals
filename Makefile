@@ -9,4 +9,4 @@ start-router:
 	@$(DTERM) start-router --rpc-host=localhost --rpc-port=9999 --web-host=localhost --web-port=8888
 
 start-worker:
-	@$(DTERM) start-worker --rpc-host=localhost --rpc-port=9999
+	@$(DTERM) start-worker --rpc-host=localhost --rpc-port=9999 --group default

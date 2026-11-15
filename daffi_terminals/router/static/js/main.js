@@ -139,7 +139,6 @@ class DirectorSocket {
             <div class="terminal-mdc-card">
                 <h4>${worker.process_name}</h4>
                 <p>host: ${worker.host}</p>
-                <p>mac:  ${worker.mac}</p>
             </div>`;
 
         if (worker.active) {

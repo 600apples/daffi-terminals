@@ -4,7 +4,7 @@
 
 A lightweight, browser-based remote terminal manager.
 Connect any number of Linux/macOS hosts to a central router and open
-interactive shell sessions in your browser — no SSH, no VPN, no agent
+interactive shell sessions in your browser — no SSH, no VPN
 configuration required.
 
 ---
@@ -20,7 +20,6 @@ configuration required.
 | **Dark / Light theme** | Theme switcher with Solarized-inspired palettes, persisted across reloads |
 | **Fuzzy search** | Filter the worker sidebar by name or MAC address |
 | **TLS encryption** | Optional encryption for both the browser connection and the worker transport |
-| **Zero footprint on workers** | Workers need only Python and `daffi` — no SSH daemon, no open ports |
 
 ---
 
@@ -30,7 +29,7 @@ configuration required.
 pip install daffi-terminals
 ```
 
-Python 3.8+ is required.
+Python 3.10+ is required.
 
 ---
 
@@ -56,7 +55,7 @@ dterm start-worker \
   --rpc-port 9999
 ```
 
-Each worker appears in the sidebar within seconds. Click a card to open a
+Each worker appears in the sidebar. Click a card to open a
 shell session.
 
 ---
@@ -77,9 +76,7 @@ shell session.
 
 The router is a single process that acts as both the RPC message broker
 (for worker communication) and the web server (for the browser UI).
-Workers connect outbound to the router — you never need to open ports on
-the worker hosts.
-
+Workers connect outbound to the router.
 ---
 
 ## CLI reference
@@ -114,8 +111,6 @@ the worker hosts.
 
 ### Worker groups
 
-![groups](docs/groups.png)
-
 Workers can be organized into named groups using the `--group` flag.
 Each group gets a distinct color and appears as a collapsible section in the sidebar,
 sorted alphabetically. Workers without a group are listed at the top.
@@ -128,7 +123,6 @@ dterm start-worker --rpc-host router --rpc-port 9999 --group "staging"
 dterm start-worker --rpc-host router --rpc-port 9999   # ungrouped — shown at top
 ```
 
-Up to 7 groups are supported, each with a unique color from the built-in rainbow palette.
 Click a group header to collapse or expand it. The collapsed state is remembered across page reloads.
 
 ### Multiple workers on the same host
